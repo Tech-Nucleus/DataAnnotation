@@ -1,187 +1,23 @@
-# The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
-# Copyright © 2023 Opentensor Foundation
+from __future__ import annotations
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the “Software”), to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software,
-# and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of
-# the Software.
-
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
-# THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-# THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
-
-import asyncio
-import os
-import random
-import base64
+import json
 from pathlib import Path
-
-import pytest
 from types import SimpleNamespace
 
-from template.hazard.artifacts import ArtifactRegistry
-from template.hazard.dataset import HazardDatasetManager
-from template.hazard.evaluator import GoldenSetEvaluator
+import numpy as np
+import pytest
+
+from template.hazard.dataset_assembler import AdoptionLedger
+from template.hazard.annotation_eval import PerMinerAnnotationScore
+from template.hazard.dual_reward import DualFlywheelBreakdown
 from template.hazard.incentives import broad_softmax_scores
-from template.hazard.scheduler import CohortScheduler
-from template.hazard.serving import CommercialServingGateway, PromotionRegistry
-from template.miner import HazardMinerEngine
-from template.miner.training import TrainingPipeline, TrainingSettings
-from template.protocol import HazardDetection, ModelCheckpoint, TrainingManifest
-from template.validator.forward import forward, _validate_response_integrity
-from template.validator.reward import get_rewards
-
-
-def test_dataset_manager_loads_all_partitions():
-    manager = HazardDatasetManager(
-        dataset_root=Path(__file__).resolve().parents[1] / "data" / "hazard"
-    )
-    pointer = manager.pointer("training_pool")
-    assert pointer.split == "training_pool"
-    assert pointer.sample_count >= 1
-    sampled = manager.sample("golden", random_state=__import__("random").Random(7))
-    assert sampled.task_id.startswith("golden-")
-    assert sampled.image_bytes
-
-
-def test_scheduler_cycles_cohorts():
-    scheduler = CohortScheduler(seed=13)
-    class Stub:
-        step = 0
-        class config:
-            class neuron:
-                sample_size = 4
-        class metagraph:
-            n = __import__("numpy").array(4)
-            axons = []
-            validator_permit = [False, False, False, False]
-            S = [0, 0, 0, 0]
-    # Cohort decision itself should not fail.
-    assert scheduler._choose_cohort(0) == "training"
-    assert scheduler._choose_cohort(3) == "training"
-    assert scheduler._choose_cohort(6) == "exploration"
-    assert scheduler._choose_cohort(7) == "verification"
-    assert scheduler._choose_cohort(8) == "promotion"
-    assert scheduler._choose_cohort(9) == "stability"
-
-
-def test_reward_pipeline_combines_inference_and_training():
-    manager = HazardDatasetManager(
-        dataset_root=Path(__file__).resolve().parents[1] / "data" / "hazard"
-    )
-    task = manager.sample("hidden_eval", random_state=__import__("random").Random(1))
-    response = HazardDetection(
-        task_type="inference",
-        dataset_partition=task.partition,
-        task_id=task.task_id,
-        site_id=task.site_id,
-        challenge_nonce="abc123",
-        image_b64=base64.b64encode(task.image_bytes).decode("ascii"),
-        hazard_detected=task.hazard_detected,
-        severity=task.severity,
-        confidence=0.9,
-        osha_refs=task.expected_osha_refs,
-        model_hash="model-abc12345",
-        rationale="Validator-audited reasoning with OSHA references and geometry evidence.",
-    )
-    registry = ArtifactRegistry()
-    registry.submit(
-        1,
-        TrainingManifest(
-            parent_model_hash="parent-hash",
-            candidate_model_hash="candidate-hash",
-            candidate_model_uri="file:///tmp/candidate",
-            config_hash="cfg-hash",
-            dataset_lineage_hash="lineage-hash",
-            recipe_uri="ipfs://recipe",
-            metrics={"uplift": 0.5, "stability": 0.8, "efficiency": 0.7},
-        ),
-    )
-    verification = registry.verify(
-        1,
-        "candidate-hash",
-        golden_score=0.8,
-        expected_parent_hash="parent-hash",
-    )
-    scores, breakdowns = get_rewards([task], [response], [verification])
-    assert len(scores) == 1
-    assert 0.0 <= float(scores[0]) <= 1.0
-    assert 0.0 <= breakdowns[0].inference_score <= 1.0
-    assert 0.0 <= breakdowns[0].training_score <= 1.0
-
-
-def test_training_pipeline_creates_real_candidate_manifest(tmp_path):
-    _r2 = (
-        os.getenv("R2_ACCOUNT_ID", "").strip()
-        and os.getenv("R2_BUCKET_NAME", "").strip()
-        and os.getenv("R2_S3_ENDPOINT", "").strip()
-        and os.getenv("R2_ACCESS_KEY_ID", "").strip()
-        and os.getenv("R2_SECRET_ACCESS_KEY", "").strip()
-    )
-    if not _r2:
-        pytest.skip("Full training pipeline requires Cloudflare R2 credentials in the environment.")
-    data_root = Path(__file__).resolve().parents[1] / "data" / "hazard"
-    manager = HazardDatasetManager(dataset_root=data_root)
-    baseline_uri = "yolov8s.pt"
-    baseline_hash = __import__("hashlib").sha256(baseline_uri.encode("utf-8")).hexdigest()
-    pipeline = TrainingPipeline(
-        TrainingSettings(
-            workspace=tmp_path,
-            private_dataset_root=None,
-            enable_auto_hpo=False,
-            autoresearch_max_iters=1,
-            autoresearch_experiment_minutes=1,
-            autoresearch_log_level="INFO",
-            random_hpo_draw=False,
-            hpo_seed=0,
-        )
-    )
-    manifest = pipeline.run(
-        task_id="training-smoke",
-        baseline=ModelCheckpoint(uri=baseline_uri, sha256=baseline_hash),
-        training_dataset=manager.pointer("training_pool"),
-        max_training_seconds=60,
-    )
-    assert manifest.parent_model_hash == baseline_hash
-    assert manifest.candidate_model_hash
-    assert manifest.candidate_model_uri.startswith(("file://", "r2://", "https://", "http://"))
-
-
-def test_golden_evaluator_and_artifact_registry_verify_training(tmp_path):
-    data_root = Path(__file__).resolve().parents[1] / "data" / "hazard"
-    manager = HazardDatasetManager(dataset_root=data_root)
-    evaluator = GoldenSetEvaluator(manager)
-    manifest = TrainingManifest(
-        parent_model_hash="baseline-1234",
-        candidate_model_hash="candidate-1234",
-        candidate_model_uri=(tmp_path / "candidate.json").as_uri(),
-        config_hash="config-1234",
-        dataset_lineage_hash=manager.pointer("training_pool").sha256,
-        recipe_uri=(tmp_path / "recipe.json").as_uri(),
-        metrics={"reproducibility_score": 1.0, "uplift": 0.6, "efficiency": 0.9},
-    )
-    # Avoid heavy model execution in this unit test; verify registry scoring path directly.
-    golden_score = 0.8
-    registry = ArtifactRegistry()
-    registry.submit(2, manifest)
-    result = registry.verify(
-        2,
-        manifest.candidate_model_hash,
-        golden_score=golden_score,
-        expected_parent_hash=manifest.parent_model_hash,
-    )
-    assert result.score > 0.0
+from template.protocol import AnnotationTask, PerImageAnnotationItem
+from template.validator.dual_forward import _validate_response_shape
 
 
 def test_broad_softmax_pays_multiple_value_adding_miners():
     shaped = broad_softmax_scores(
-        __import__("numpy").array([0.0, 0.2, 0.4, 0.8], dtype=float),
+        np.array([0.0, 0.2, 0.4, 0.8], dtype=float),
         temperature=0.35,
         floor=0.01,
         min_score=0.05,
@@ -191,168 +27,114 @@ def test_broad_softmax_pays_multiple_value_adding_miners():
     assert abs(float(shaped.sum()) - 1.0) < 1e-6
 
 
-def test_promotion_registry_prefers_recent_high_quality_models():
-    registry = PromotionRegistry(
-        min_promotion_score=0.5,
-        recency_decay=0.01,
-        min_live_multiplier=0.3,
-    )
-    assert registry.maybe_promote(uid=1, model_hash="a" * 64, score=0.9, step=100)
-    assert registry.maybe_promote(uid=2, model_hash="b" * 64, score=0.86, step=140)
-    top_now = registry.top_models(current_step=140, limit=1)
-    assert top_now[0].uid == 2
-    # At very late steps both entries decay toward the floor multiplier, but
-    # the stronger base score should still remain competitive.
-    top_late = registry.top_models(current_step=10_000, limit=2)
-    assert len(top_late) == 2
-
-
-def test_isolated_validator_miner_training_then_inference(tmp_path):
-    data_root = Path(__file__).resolve().parents[1] / "data" / "hazard"
-    baseline_uri = "yolov8s.pt"
-    baseline_hash = __import__("hashlib").sha256(baseline_uri.encode("utf-8")).hexdigest()
-    dataset_manager = HazardDatasetManager(dataset_root=data_root)
-
-    class LocalDendrite:
-        def __init__(self):
-            self.engines = {
-                1: HazardMinerEngine(
-                    config=SimpleNamespace(
-                        miner=SimpleNamespace(
-                            training_workspace=str(tmp_path / "miner-1"),
-                            private_dataset_root="",
-                            enable_auto_hpo=False,
-                        )
-                    )
-                ),
-                2: HazardMinerEngine(
-                    config=SimpleNamespace(
-                        miner=SimpleNamespace(
-                            training_workspace=str(tmp_path / "miner-2"),
-                            private_dataset_root="",
-                            enable_auto_hpo=False,
-                        )
-                    )
-                ),
-            }
-
-        async def __call__(self, axons, synapse, timeout, deserialize):
-            responses = []
-            for axon in axons:
-                response = synapse.model_copy(deep=True)
-                responses.append(self.engines[axon.uid].run(response))
-            return responses
-
-    class LocalValidator:
-        def __init__(self):
-            self.step = 0
-            self.random = random.Random(4)
-            self.dataset_manager = dataset_manager
-            self.scheduler = CohortScheduler(seed=4)
-            self.artifact_registry = ArtifactRegistry()
-            self.golden_evaluator = GoldenSetEvaluator(dataset_manager)
-            self.promotion_registry = PromotionRegistry(min_promotion_score=0.2)
-            self.serving_gateway = CommercialServingGateway(self.promotion_registry)
-            self.baseline_checkpoint_hash = baseline_hash
-            self.dendrite = LocalDendrite()
-            self.metagraph = SimpleNamespace(
-                n=__import__("numpy").array(3),
-                axons=[
-                    SimpleNamespace(uid=0, is_serving=False),
-                    SimpleNamespace(uid=1, is_serving=True),
-                    SimpleNamespace(uid=2, is_serving=True),
-                ],
-                hotkeys=["hk0", "hk1", "hk2"],
-                validator_permit=[False, False, False],
-                S=[0.0, 0.0, 0.0],
-            )
-            self.config = SimpleNamespace(
-                    subtensor=SimpleNamespace(chain_endpoint="ws://127.0.0.1:9944"),
-                neuron=SimpleNamespace(
-                    sample_size=2,
-                    vpermit_tao_limit=4096,
-                    timeout=10,
-                    moving_average_alpha=1.0,
-                    baseline_checkpoint_uri=baseline_uri,
-                    max_training_seconds=60,
-                )
-            )
-            self.scores = __import__("numpy").zeros(3, dtype=__import__("numpy").float32)
-            self.inference_scores = __import__("numpy").zeros(3, dtype=__import__("numpy").float32)
-            self.training_scores = __import__("numpy").zeros(3, dtype=__import__("numpy").float32)
-            self.last_serving_model_hash = None
-
-        def update_scores(self, rewards, uids):
-            for uid, reward in zip(uids, rewards):
-                self.scores[uid] = reward
-
-        def update_score_ledgers(self, breakdowns, uids):
-            for uid, item in zip(uids, breakdowns):
-                self.inference_scores[uid] = item.inference_score
-                self.training_scores[uid] = item.training_score
-            self.last_serving_model_hash = self.serving_gateway.select_model_hash(
-                current_step=self.step
-            )
-
-    validator = LocalValidator()
-    asyncio.run(forward(validator))
-    assert validator.training_scores[1] > 0.0
-    assert validator.training_scores[2] > 0.0
-
-    validator.step = 3
-    asyncio.run(forward(validator))
-    assert validator.inference_scores[1] >= 0.0
-    assert validator.last_serving_model_hash is not None
-
-
-def test_response_integrity_rejects_nonce_mismatch():
-    response = HazardDetection(task_id="t-1", challenge_nonce="bad-nonce")
+def test_response_shape_rejects_nonce_mismatch():
+    response = AnnotationTask(task_id="t-1", challenge_nonce="bad-nonce")
     with pytest.raises(ValueError, match="Challenge nonce mismatch"):
-        _validate_response_integrity(
-            response=response,
+        _validate_response_shape(
+            response,
             expected_task_id="t-1",
             expected_nonce="good-nonce",
         )
 
 
-def test_response_integrity_rejects_invalid_manifest_fields():
-    response = HazardDetection(
-        task_id="t-2",
-        challenge_nonce="abc123abc123abcd",
-        submitted_training_manifest=TrainingManifest(
-            parent_model_hash="a" * 64,
-            candidate_model_hash="b" * 64,
-            candidate_model_uri="ftp://example.com/model.pt",
-            config_hash="c" * 64,
-            dataset_lineage_hash="d" * 64,
-            recipe_uri="ipfs://recipe",
-            metrics={},
-        ),
-    )
-    with pytest.raises(ValueError, match="candidate_model_uri must use r2://"):
-        _validate_response_integrity(
-            response=response,
+def test_response_shape_requires_annotations_uri():
+    response = AnnotationTask(task_id="t-2", challenge_nonce="nonce")
+    with pytest.raises(ValueError, match="annotations_uri"):
+        _validate_response_shape(
+            response,
             expected_task_id="t-2",
-            expected_nonce="abc123abc123abcd",
+            expected_nonce="nonce",
         )
 
 
-def test_response_integrity_accepts_https_manifest_uri():
-    response = HazardDetection(
-        task_id="t-2b",
-        challenge_nonce="abc123abc123abcd",
-        submitted_training_manifest=TrainingManifest(
-            parent_model_hash="a" * 64,
-            candidate_model_hash="b" * 64,
-            candidate_model_uri="https://example.com/model.pt?sig=1",
-            config_hash="c" * 64,
-            dataset_lineage_hash="d" * 64,
-            recipe_uri="ipfs://recipe",
-            metrics={},
-        ),
+def test_adoption_ledger_state_round_trip(tmp_path: Path):
+    ledger = AdoptionLedger(
+        adoption_counts={1: 4},
+        last_round_counts={1: 2},
+        adoption_contributions={1: 3.5},
+        last_round_contributions={1: 1.5},
+        rounds_observed=3,
     )
-    _validate_response_integrity(
-        response=response,
-        expected_task_id="t-2b",
-        expected_nonce="abc123abc123abcd",
+    path = tmp_path / "adoption_ledger.json"
+    path.write_text(json.dumps(ledger.to_jsonable()), encoding="utf-8")
+    restored = AdoptionLedger.from_jsonable(json.loads(path.read_text(encoding="utf-8")))
+    assert restored.adoption_counts == {1: 4}
+    assert restored.last_round_contributions == {1: 1.5}
+
+
+def test_annotation_score_ema_update():
+    state = SimpleNamespace(
+        config=SimpleNamespace(neuron=SimpleNamespace(moving_average_alpha=0.25)),
+        annotation_scores=np.array([0.0, 0.4], dtype=np.float32),
+        adoption_bonus_scores=np.array([0.0, 0.2], dtype=np.float32),
     )
+
+    def update_score_ledgers(breakdowns, uids):
+        alpha = float(state.config.neuron.moving_average_alpha)
+        for uid, item in zip(uids, breakdowns):
+            state.annotation_scores[uid] = (
+                alpha * item.annotation_score + (1.0 - alpha) * state.annotation_scores[uid]
+            )
+            state.adoption_bonus_scores[uid] = (
+                alpha * item.adoption_bonus
+                + (1.0 - alpha) * state.adoption_bonus_scores[uid]
+            )
+
+    update_score_ledgers(
+        [
+            DualFlywheelBreakdown(
+                uid=1,
+                annotation_score=1.0,
+                adoption_bonus=0.8,
+                hallucination_multiplier=1.0,
+                final_score=0.94,
+                fidelity_image_ids=2,
+                consensus_image_ids=3,
+                adopted_image_ids_round=2,
+                adopted_image_ids_total=5,
+            )
+        ],
+        [1],
+    )
+    assert state.annotation_scores[1] == pytest.approx(0.55)
+    assert state.adoption_bonus_scores[1] == pytest.approx(0.35)
+
+
+def test_per_miner_average_score_uses_golden_only():
+    score = PerMinerAnnotationScore(
+        uid=7,
+        fidelity_scores_by_image_id={"g1": 0.9, "g2": 0.7},
+        consensus_scores_by_image_id={"pool1": 0.1, "pool2": 0.2},
+    )
+    assert score.average_score() == pytest.approx(0.8)
+
+
+def test_annotation_item_accepts_float_boxes():
+    item = PerImageAnnotationItem(
+        hazard_class="trip_hazard",
+        bounding_box=[1.5, 2.5, 10.0, 12.0],
+        severity="low",
+    )
+    assert item.bounding_box[0] == pytest.approx(1.5)
+
+
+def test_broad_softmax_scaling_floor_edge_case():
+    # N=20 eligible miners with floor=0.1, which would make floor * N = 2.0 > 1.0
+    scores = np.ones(20, dtype=float)
+    # Give the first miner a higher score
+    scores[0] = 5.0
+    
+    shaped = broad_softmax_scores(
+        scores,
+        temperature=0.35,
+        floor=0.1,
+        min_score=0.05,
+    )
+    
+    # Assert that the sum is exactly 1.0 (or extremely close)
+    assert abs(float(shaped.sum()) - 1.0) < 1e-6
+    # The first miner must have the highest incentive and not be zeroed out
+    assert shaped[0] > shaped[1]
+    assert shaped[1] == pytest.approx(shaped[-1])
+    assert shaped[0] > 0.0
+    assert (shaped >= 0.0).all()

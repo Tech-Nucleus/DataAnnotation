@@ -10,6 +10,8 @@ NETUID="${NETUID:-2}"
 
 # Comma-separated: wallet_name:hotkey_name
 EXTRA_MINERS="${EXTRA_MINERS:-miner2:minerhk2,miner3:minerhk3}"
+# Pause between register extrinsics to avoid Subtensor RateLimitExceeded (custom error 6).
+REGISTER_SLEEP_SECONDS="${REGISTER_SLEEP_SECONDS:-45}"
 # Set AUTO_FUND=1 to send TAO from a funded local wallet before register (avoids recycle balance errors).
 AUTO_FUND="${AUTO_FUND:-0}"
 FUNDER_WALLET="${FUNDER_WALLET:-owner}"
@@ -17,6 +19,12 @@ FUND_AMOUNT="${FUND_AMOUNT:-1.0}"
 NEURON_PYTHON="${NEURON_PYTHON:-$ROOT_DIR/.venv-neurons/bin/python}"
 
 IFS=',' read -r -a PAIRS <<< "$EXTRA_MINERS"
+nonempty=0
+for pair in "${PAIRS[@]}"; do
+  [[ -z "$pair" ]] && continue
+  nonempty=$((nonempty + 1))
+done
+seen=0
 for pair in "${PAIRS[@]}"; do
   [[ -z "$pair" ]] && continue
   name="${pair%%:*}"
@@ -65,6 +73,11 @@ PY
     --netuid "$NETUID" \
     --no-prompt \
     --unsafe-register
+  seen=$((seen + 1))
+  if [[ "$seen" -lt "$nonempty" ]]; then
+    echo "[register-extra] sleeping ${REGISTER_SLEEP_SECONDS}s before next register (rate-limit spacing)"
+    sleep "${REGISTER_SLEEP_SECONDS}"
+  fi
 done
 
 echo "[register-extra] done"

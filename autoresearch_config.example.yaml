@@ -1,0 +1,18 @@
+# Auto-research hyperparameter search space configuration.
+#
+# Each key maps to a list of values to try.  The auto-research loop evaluates
+# the Cartesian product (or a random sample if --miner.autoresearch_max_trials
+# is set) and selects the best configuration by validation performance.
+#
+# Usage:
+#   python neurons/miner.py \
+#     --miner.model_backend yolo_local \
+#     --miner.enable_autoresearch \
+#     --miner.autoresearch_config_path autoresearch_config.example.yaml \
+#     --miner.autoresearch_max_trials 4
+
+search_space:
+  epochs: [10, 20, 50, 100]
+  lr0: [0.001, 0.005, 0.01, 0.05]
+  batch: [8, 16, 32]
+  imgsz: [640, 1280]

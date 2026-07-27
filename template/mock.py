@@ -1,10 +1,45 @@
 import asyncio
+import json
 import random
+import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
-from template.miner import HazardMinerEngine
+from template.protocol import (
+    AnnotationTask,
+    AnnotationsFilePayload,
+    ImageAnnotationDocument,
+    PerImageAnnotationItem,
+)
+
+
+def _write_mock_annotations_file(task_id: str, annotation_images: list) -> str:
+    records = []
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for img in annotation_images:
+        records.append(
+            ImageAnnotationDocument(
+                image_id=img.image_id,
+                image_url=img.image_url,
+                miner_uid="mock-miner",
+                timestamp=ts,
+                annotations=[
+                    PerImageAnnotationItem(
+                        hazard_class="missing_hardhat",
+                        bounding_box=[10, 10, 40, 40],
+                    )
+                ],
+                model_version="mock" * 8,
+            )
+        )
+    payload = AnnotationsFilePayload(schema_version="annotations.v1", task_id=task_id, records=records)
+    path = Path(tempfile.gettempdir()) / f"mock-annotations-{task_id}.json"
+    path.write_text(json.dumps(payload.model_dump(), indent=2), encoding="utf-8")
+    return path.as_uri()
 
 
 @dataclass
@@ -102,17 +137,24 @@ class MockAxon:
 class MockDendrite:
     def __init__(self, wallet):
         self.wallet = wallet
-        self.engines = {}
 
     async def __call__(self, axons, synapse, timeout=12, deserialize=True, **kwargs):
         async def single_response(axon):
             response = synapse.model_copy(deep=True)
-            engine = self.engines.setdefault(axon.uid, HazardMinerEngine())
-            process_time = random.random()
-            if process_time < timeout:
-                response = engine.run(response)
-            else:
+            if random.random() >= timeout:
                 response.error_message = "Timeout"
+                return response.deserialize() if deserialize else response
+
+            if isinstance(synapse, AnnotationTask):
+                if not synapse.annotation_images:
+                    response.error_message = "annotation_images must be non-empty."
+                else:
+                    response.annotations_uri = _write_mock_annotations_file(
+                        synapse.task_id or f"mock-{axon.uid}",
+                        synapse.annotation_images,
+                    )
+                    response.error_message = None
+                    response.duration_ms = 1
             return response.deserialize() if deserialize else response
 
         return await asyncio.gather(*(single_response(axon) for axon in axons))

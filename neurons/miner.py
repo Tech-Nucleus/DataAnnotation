@@ -17,109 +17,84 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-import time
 import typing
+
+import template.compat.bittensor_commit_hotkey  # noqa: F401 — before bittensor: drand hotkey + subtensor rebind
+
 import bittensor as bt
 
-# Bittensor Miner Template:
 import template
-from template.miner import AnnotationTrainingEngine, HazardMinerEngine
+from template.miner import AnnotationEngine
 
-# import base miner class which takes care of most of the boilerplate
 from template.base.miner import BaseMinerNeuron
 
 
 class Miner(BaseMinerNeuron):
-    """
-    Your miner neuron class. You should use this class to define your miner's behavior. In particular, you should replace the forward function with your own logic. You may also want to override the blacklist and priority functions according to your needs.
-
-    This class inherits from the BaseMinerNeuron class, which in turn inherits from BaseNeuron. The BaseNeuron class takes care of routine tasks such as setting up wallet, subtensor, metagraph, logging directory, parsing config, etc. You can override any of the methods in BaseNeuron if you need to customize the behavior.
-
-    This class provides reasonable default behavior for a miner such as blacklisting unrecognized hotkeys, prioritizing requests based on stake, and forwarding requests to the forward function. If you need to define custom
-    """
+    """Annotation miner: supports legacy single-pass and multi-backend training modes."""
 
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
-        self.engine = HazardMinerEngine(config=self.config)
-        self.annotation_engine = AnnotationTrainingEngine(config=self.config)
+
+        # Select engine based on --miner.model_backend
+        backend = str(
+            getattr(getattr(self.config, "miner", object()), "model_backend", "") or ""
+        ).strip()
+
+        if backend in ("yolo_local", "self_hosted", "openai_vision"):
+            from template.miner.training_engine import ModelTrainingAnnotationEngine
+
+            self.annotation_engine = ModelTrainingAnnotationEngine(config=self.config)
+            bt.logging.info(
+                f"Miner using ModelTrainingAnnotationEngine with backend={backend}"
+            )
+        else:
+            # Legacy path — original AnnotationEngine
+            self.annotation_engine = AnnotationEngine(config=self.config)
+            bt.logging.info("Miner using legacy AnnotationEngine")
+
         self.axon.attach(
-            forward_fn=self.forward_annotation_training,
-            blacklist_fn=self.blacklist_annotation_training,
-            priority_fn=self.priority_annotation_training,
+            forward_fn=self.forward_annotation,
+            blacklist_fn=self.blacklist_annotation,
+            priority_fn=self.priority_annotation,
         )
 
-    async def forward(
-        self, synapse: template.protocol.HazardDetection
-    ) -> template.protocol.HazardDetection:
-        """
-        Process validator-issued hazard tasks through the unified production engine.
-        """
-        try:
-            synapse = self.engine.run(synapse)
-        except Exception as exc:
-            bt.logging.error(f"Miner failed task {synapse.task_id}: {exc}")
-            synapse.error_message = str(exc)
+    async def forward(self, synapse: bt.Synapse) -> bt.Synapse:
+        """Stub: annotation-only miner handles tasks via forward_annotation."""
+        bt.logging.warning("Generic forward called — annotation miner expects AnnotationTask.")
         return synapse
 
-    async def forward_annotation_training(
-        self, synapse: template.protocol.AnnotationAndTrainingTask
-    ) -> template.protocol.AnnotationAndTrainingTask:
-        """
-        Dual-flywheel round: fine-tune on labeled URLs, annotate unlabeled URLs, upload to R2.
-        """
+    async def blacklist(self, synapse: bt.Synapse) -> typing.Tuple[bool, str]:
+        """Stub for generic Synapse blacklist — only AnnotationTask accepted."""
+        return True, "Use AnnotationTask protocol"
+
+    async def priority(self, synapse: bt.Synapse) -> float:
+        """Stub for generic Synapse priority."""
+        return 0.0
+
+    async def forward_annotation(
+        self, synapse: template.protocol.AnnotationTask
+    ) -> template.protocol.AnnotationTask:
+        """Annotate unlabeled images and upload annotations.json."""
         try:
             synapse = self.annotation_engine.run(
                 synapse, miner_hotkey=self.wallet.hotkey.ss58_address
             )
         except Exception as exc:
-            bt.logging.error(f"AnnotationTraining task {synapse.task_id} failed: {exc}")
+            bt.logging.error(f"Annotation task {synapse.task_id} failed: {exc}")
             synapse.error_message = str(exc)
         return synapse
 
-    async def blacklist(
-        self, synapse: template.protocol.HazardDetection
+    async def blacklist_annotation(
+        self, synapse: template.protocol.AnnotationTask
     ) -> typing.Tuple[bool, str]:
-        """
-        Determines whether an incoming request should be blacklisted and thus ignored. Your implementation should
-        define the logic for blacklisting requests based on your needs and desired security parameters.
-
-        Blacklist runs before the synapse data has been deserialized (i.e. before synapse.data is available).
-        The synapse is instead contracted via the headers of the request. It is important to blacklist
-        requests before they are deserialized to avoid wasting resources on requests that will be ignored.
-
-        Args:
-            synapse (template.protocol.HazardDetection): Synapse from incoming validator request.
-
-        Returns:
-            Tuple[bool, str]: A tuple containing a boolean indicating whether the synapse's hotkey is blacklisted,
-                            and a string providing the reason for the decision.
-
-        This function is a security measure to prevent resource wastage on undesired requests. It should be enhanced
-        to include checks against the metagraph for entity registration, validator status, and sufficient stake
-        before deserialization of synapse data to minimize processing overhead.
-
-        Example blacklist logic:
-        - Reject if the hotkey is not a registered entity within the metagraph.
-        - Consider blacklisting entities that are not validators or have insufficient stake.
-
-        In practice it would be wise to blacklist requests from entities that are not validators, or do not have
-        enough stake. This can be checked via metagraph.S and metagraph.validator_permit. You can always attain
-        the uid of the sender via a metagraph.hotkeys.index( synapse.dendrite.hotkey ) call.
-
-        Otherwise, allow the request to be processed further.
-        """
-
         if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
+            bt.logging.warning("Received a request without a dendrite or hotkey.")
             return True, "Missing dendrite or hotkey"
 
         if (
             not self.config.blacklist.allow_non_registered
             and synapse.dendrite.hotkey not in self.metagraph.hotkeys
         ):
-            # Ignore requests from un-registered entities.
             bt.logging.trace(
                 f"Blacklisting un-registered hotkey {synapse.dendrite.hotkey}"
             )
@@ -127,7 +102,6 @@ class Miner(BaseMinerNeuron):
         uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
 
         if self.config.blacklist.force_validator_permit:
-            # If the config is set to force validator permit, then we should only allow requests from validators.
             if not self.metagraph.validator_permit[uid]:
                 bt.logging.warning(
                     f"Blacklisting a request from non-validator hotkey {synapse.dendrite.hotkey}"
@@ -139,89 +113,23 @@ class Miner(BaseMinerNeuron):
         )
         return False, "Hotkey recognized!"
 
-    async def blacklist_annotation_training(
-        self, synapse: template.protocol.AnnotationAndTrainingTask
-    ) -> typing.Tuple[bool, str]:
-        if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
-            return True, "Missing dendrite or hotkey"
-
-        if (
-            not self.config.blacklist.allow_non_registered
-            and synapse.dendrite.hotkey not in self.metagraph.hotkeys
-        ):
-            bt.logging.trace(
-                f"Blacklisting un-registered hotkey {synapse.dendrite.hotkey}"
-            )
-            return True, "Unrecognized hotkey"
-        uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
-
-        if self.config.blacklist.force_validator_permit:
-            if not self.metagraph.validator_permit[uid]:
-                bt.logging.warning(
-                    f"Blacklisting a request from non-validator hotkey {synapse.dendrite.hotkey}"
-                )
-                return True, "Non-validator hotkey"
-
-        return False, "Hotkey recognized!"
-
-    async def priority(
-        self, synapse: template.protocol.HazardDetection
+    async def priority_annotation(
+        self, synapse: template.protocol.AnnotationTask
     ) -> float:
-        """
-        The priority function determines the order in which requests are handled. More valuable or higher-priority
-        requests are processed before others. You should design your own priority mechanism with care.
-
-        This implementation assigns priority to incoming requests based on the calling entity's stake in the metagraph.
-
-        Args:
-            synapse (template.protocol.HazardDetection): Incoming protocol message.
-
-        Returns:
-            float: A priority score derived from the stake of the calling entity.
-
-        Miners may receive messages from multiple entities at once. This function determines which request should be
-        processed first. Higher values indicate that the request should be processed first. Lower values indicate
-        that the request should be processed later.
-
-        Example priority logic:
-        - A higher stake results in a higher priority value.
-        """
         if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
             return 0.0
-
-        caller_uid = self.metagraph.hotkeys.index(
-            synapse.dendrite.hotkey
-        )  # Get the caller index.
-        priority = float(
-            self.metagraph.S[caller_uid]
-        )  # Return the stake as the priority.
+        caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+        priority = float(self.metagraph.S[caller_uid])
         bt.logging.trace(
             f"Prioritizing {synapse.dendrite.hotkey} with value: {priority}"
         )
         return priority
 
-    async def priority_annotation_training(
-        self, synapse: template.protocol.AnnotationAndTrainingTask
-    ) -> float:
-        if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
-            return 0.0
 
-        caller_uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
-        return float(self.metagraph.S[caller_uid])
-
-
-# This is the main function, which runs the miner.
+# The main function parses the configuration and runs the miner.
 if __name__ == "__main__":
     with Miner() as miner:
         while True:
-            bt.logging.info(f"Miner running... {time.time()}")
+            bt.logging.info("Miner running...")
+            import time
             time.sleep(5)

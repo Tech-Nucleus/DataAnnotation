@@ -110,7 +110,7 @@ run_cmd "\"$BTCLI_BIN\" wallet create --wallet-name \"$VALIDATOR_WALLET_NAME\" -
 
 echo "=== Step 4: Create subnet ==="
 CREATE_JSON="$(mktemp)"
-run_cmd "printf \"\\n\\n\\n\\n\\n\" | \"$BTCLI_BIN\" subnets create --wallet-name \"$OWNER_WALLET_NAME\" --wallet-path \"$WALLET_PATH\" --hotkey \"$OWNER_HOTKEY\" --network \"$CHAIN_ENDPOINT\" --subnet-name \"$SUBNET_NAME\" --github-repo \"$SUBNET_GITHUB_REPO\" --subnet-contact \"$SUBNET_CONTACT\" --description \"$SUBNET_DESCRIPTION\" --json-output --no-prompt --no-mev-protection > \"$CREATE_JSON\""
+run_cmd "printf \"\\n\\n\\n\\n\\n\" | \"$BTCLI_BIN\" subnets create --wallet-name \"$OWNER_WALLET_NAME\" --wallet-path \"$WALLET_PATH\" --hotkey \"$OWNER_HOTKEY\" --network \"$CHAIN_ENDPOINT\" --subnet-name \"$SUBNET_NAME\" --github-repo \"$SUBNET_GITHUB_REPO\" --subnet-contact \"$SUBNET_CONTACT\" --description \"$SUBNET_DESCRIPTION\" --json-output --no-prompt > \"$CREATE_JSON\""
 
 if [[ "$DRY_RUN" != "1" ]]; then
   NETUID="$("$NEURON_PYTHON" - "$CREATE_JSON" <<'PY'

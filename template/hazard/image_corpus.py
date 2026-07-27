@@ -6,10 +6,10 @@ specification:
 
   1. Golden Set         (validator-only ground truth, 30% of the labeled
                          construction-safety dataset, never shared raw).
-  2. Miner Training Pool (the remaining 70%, served to miners with labels).
-  3. Miner Annotation Pool (large unlabeled construction-image datasets, served
-                            to miners as URLs only, no labels).
-  4. Cross-Domain Benchmark (validator-only, used to detect overfitting).
+  2. Miner Annotation Pool (the remaining shared images, served to miners as
+                            URLs only, no labels).
+  3. Optional Extra Annotation Pool (additional unlabeled datasets, if configured).
+  4. Cross-Domain Benchmark (validator-only, used for offline evaluation only).
 
 Every image receives a permanent ``image_id`` derived from
 ``sha256(image_bytes)``, which makes per-image-id traceability across rounds
@@ -81,22 +81,6 @@ def _severity_for_label(label: str) -> SeverityTier:
     return "medium"
 
 
-def _reasoning_for_label(label: str, severity: SeverityTier) -> str:
-    """Generate a deterministic, human-readable reasoning sentence for the
-    Golden Set ground truth.
-
-    The reasoning is grounded in the hazard class and severity so cosine
-    similarity against miner-produced reasoning chains is meaningful.
-    """
-
-    base = re.sub(r"[_\-]+", " ", label).strip().lower() or "construction hazard"
-    return (
-        f"Observed {base} on a construction site. Severity={severity}. "
-        f"Worker safety is at risk without immediate corrective action and "
-        f"appropriate OSHA-compliant controls."
-    )
-
-
 @dataclass(frozen=True)
 class GoldenAnnotation:
     """One ground-truth instance for a Golden Set image."""
@@ -104,24 +88,11 @@ class GoldenAnnotation:
     hazard_class: str
     bounding_box: Tuple[int, int, int, int]  # pixel coords [x_min, y_min, x_max, y_max]
     severity: SeverityTier
-    reasoning: str
 
 
 @dataclass(frozen=True)
 class GoldenImage:
     """A fully-labeled Golden Set image (validator-only)."""
-
-    image_id: str
-    image_path: Path
-    image_url: str
-    width: int
-    height: int
-    annotations: Tuple[GoldenAnnotation, ...]
-
-
-@dataclass(frozen=True)
-class TrainingImage:
-    """A labeled training-pool image surfaced to miners for fine-tuning."""
 
     image_id: str
     image_path: Path
@@ -157,14 +128,28 @@ class BenchmarkImage:
 
 @dataclass
 class ImageCorpusConfig:
-    """User-configurable settings for the dual-flywheel image corpus."""
+    """User-configurable settings for the dual-flywheel image corpus.
+
+    **Default dataset (Phase 1 Testnet): Climate MRV**
+    When ``golden_dataset_id`` is ``'climate_mrv'`` (the default), the
+    :mod:`template.hazard.climate_mrv_corpus` loader is used to pull
+    Sentinel-2 imagery and Hansen/ESA golden samples (with automatic GEE
+    fallback to pre-exported chips).  Set ``golden_dataset_id`` to any
+    HuggingFace dataset ID to revert to the legacy HF loading path.
+    """
 
     cache_root: Path
     serving_base_url: str = ""
-    golden_dataset_id: str = "keremberke/construction-safety-object-detection"
+    # ---------------------------------------------------------------
+    # DATASET SOURCE — default is Climate MRV (satellite imagery).
+    # Set to a HuggingFace dataset ID (e.g.
+    # "keremberke/construction-safety-object-detection") to use the
+    # legacy HF loading path instead.
+    # ---------------------------------------------------------------
+    golden_dataset_id: str = "climate_mrv"
     golden_split: str = "train"
     golden_ratio: float = 0.3
-    golden_split_seed: int = 20260509
+    golden_split_seed: int = 20260601
     annotation_dataset_ids: Sequence[str] = field(default_factory=tuple)
     annotation_split: str = "train"
     annotation_max_per_dataset: int = 512
@@ -174,6 +159,22 @@ class ImageCorpusConfig:
     # Modern ``datasets`` rejects legacy Hub dataset scripts; the parquet
     # snapshot branch is the supported load path for these repos.
     hf_revision: str = "refs/convert/parquet"
+    # Ratio of annotation pool images to expose as labeled Training Pool for miners.
+    # These images get ground-truth annotations shared with miners for fine-tuning.
+    training_pool_ratio: float = 0.15
+    training_pool_max: int = 30
+    # When set, load Golden + pool from ``scripts/localnet/prepare_coco_val2017_subset.py``
+    # manifest instead of HuggingFace (localnet COCO acceptance tests).
+    coco_manifest_path: str = ""
+
+    # ---------------------------------------------------------------
+    # Climate MRV specific fields (ignored when golden_dataset_id != 'climate_mrv')
+    # ---------------------------------------------------------------
+    climate_mrv_gee_project: str = ""           # GEE cloud project ID (optional)
+    climate_mrv_n_raw_chips: int = 200          # Sentinel-2 annotation-pool chips per run
+    climate_mrv_n_golden_chips: int = 60        # Hansen/ESA golden chips (validator-only)
+    climate_mrv_fallback_dir: str = ""          # Pre-exported chip directory (offline mode)
+    climate_mrv_fallback_golden_manifest: str = ""  # JSON label manifest for fallback chips
 
     def normalized_annotation_entries(self) -> List[Tuple[str, str]]:
         """Return ``(hub_dataset_id, split)`` for each annotation source.
@@ -205,7 +206,7 @@ class ImageCorpusConfig:
 class ImageCorpus:
     """Validator-owned image corpus with per-image_id traceability.
 
-    Loads four populations (Golden, Training, Annotation, Benchmark) once,
+    Loads three populations (Golden, Annotation, Benchmark) once,
     caches image bytes locally keyed by ``sha256(image_bytes)``, and exposes
     typed accessors plus a quick lookup table of Golden ground-truth records
     (used by :class:`AnnotationFidelityScorer`).
@@ -218,28 +219,50 @@ class ImageCorpus:
         self._lock = threading.Lock()
         self._loaded = False
         self._golden: List[GoldenImage] = []
-        self._training: List[TrainingImage] = []
         self._annotation: List[UnlabeledImage] = []
+        self._training_pool: List[GoldenImage] = []  # labeled subset of annotation pool
         self._benchmark: List[BenchmarkImage] = []
         self._golden_index: Dict[str, GoldenImage] = {}
         self._all_image_index: Dict[str, Path] = {}
 
     # ------------------------------------------------------------------ API
     def ensure_loaded(self) -> None:
-        """Idempotently materialize all four populations to local disk."""
+        """Idempotently materialize all four populations to local disk.
+
+        Loading priority (first match wins):
+          1. COCO local manifest   (``coco_manifest_path`` is set)
+          2. Climate MRV dataset   (``golden_dataset_id == 'climate_mrv'``)
+          3. HuggingFace datasets  (legacy — any other dataset ID)
+        """
         with self._lock:
             if self._loaded:
                 return
             bt.logging.info("event=image_corpus_load_start cache_root=%s" % self.cache_root)
-            self._load_golden_and_training()
-            self._load_annotation_pool()
-            self._load_benchmark()
+            manifest = (self.config.coco_manifest_path or "").strip()
+            if manifest:
+                from template.hazard.coco_corpus import load_coco_manifest_into_corpus
+                load_coco_manifest_into_corpus(self, Path(manifest))
+            elif (self.config.golden_dataset_id or "").strip().lower() == "climate_mrv":
+                from template.hazard.climate_mrv_corpus import load_climate_mrv_into_corpus
+                bt.logging.info(
+                    "event=image_corpus_mode mode=climate_mrv "
+                    "spec='Climate MRV Subnet Data Sources Specification June 2026'"
+                )
+                load_climate_mrv_into_corpus(self)
+            else:
+                # Legacy HuggingFace path (retained for backward compatibility)
+                bt.logging.info(
+                    f"event=image_corpus_mode mode=huggingface "
+                    f"dataset={self.config.golden_dataset_id}"
+                )
+                self._load_golden_and_annotation_pool()
+                self._load_annotation_pool()
+                self._load_benchmark()
             self._loaded = True
             bt.logging.info(
-                "event=image_corpus_load_done golden=%d training=%d annotation=%d benchmark=%d"
+                "event=image_corpus_load_done golden=%d annotation=%d benchmark=%d"
                 % (
                     len(self._golden),
-                    len(self._training),
                     len(self._annotation),
                     len(self._benchmark),
                 )
@@ -249,13 +272,14 @@ class ImageCorpus:
         self.ensure_loaded()
         return list(self._golden)
 
-    def training_images(self) -> List[TrainingImage]:
-        self.ensure_loaded()
-        return list(self._training)
-
     def annotation_images(self) -> List[UnlabeledImage]:
         self.ensure_loaded()
         return list(self._annotation)
+
+    def training_pool_images(self) -> List[GoldenImage]:
+        """Return the public Training Pool — labeled images shared with miners."""
+        self.ensure_loaded()
+        return list(self._training_pool)
 
     def benchmark_images(self) -> List[BenchmarkImage]:
         self.ensure_loaded()
@@ -273,16 +297,15 @@ class ImageCorpus:
     def known_image_path(self, image_id: str) -> Optional[Path]:
         """Local filesystem path for a previously-cached image, if known.
 
-        Used by the model evaluator to feed the same Golden/benchmark images
-        through the miner's downloaded checkpoint.
+        Used by validator-side assembly / serving helpers.
         """
         self.ensure_loaded()
         return self._all_image_index.get(image_id)
 
     # -------------------------------------------------------- internal load
-    def _load_golden_and_training(self) -> None:
+    def _load_golden_and_annotation_pool(self) -> None:
         """Load the labeled construction-safety dataset and apply the
-        deterministic 30/70 Golden vs Training split."""
+        deterministic Golden vs annotation-pool split."""
 
         records = list(
             _iter_hf_image_records(
@@ -338,14 +361,14 @@ class ImageCorpus:
                 self._golden.append(golden)
                 self._golden_index[image_id] = golden
             else:
-                self._training.append(
-                    TrainingImage(
+                self._annotation.append(
+                    UnlabeledImage(
                         image_id=image_id,
                         image_path=cached_path,
                         image_url=self._image_url(cached_path),
                         width=width,
                         height=height,
-                        annotations=annotations,
+                        source_dataset=self.config.golden_dataset_id,
                     )
                 )
 
@@ -353,9 +376,9 @@ class ImageCorpus:
             raise RuntimeError(
                 "Golden split is empty after partitioning; check golden_ratio/seed."
             )
-        if not self._training:
+        if not self._annotation:
             raise RuntimeError(
-                "Training split is empty after partitioning; check golden_ratio/seed."
+                "Annotation split is empty after partitioning; check golden_ratio/seed."
             )
 
     def _load_annotation_pool(self) -> None:
@@ -363,9 +386,7 @@ class ImageCorpus:
 
         entries = self.config.normalized_annotation_entries()
         if not entries:
-            raise RuntimeError(
-                "flywheel_annotation_dataset_ids is empty; the annotation pool would be empty."
-            )
+            return
         per_cap = max(0, int(self.config.annotation_max_per_dataset))
         for dataset_id, ann_split in entries:
             count = 0
@@ -377,6 +398,10 @@ class ImageCorpus:
                 hf_revision=self.config.hf_revision,
             ):
                 image_id = hashlib.sha256(image_bytes).hexdigest()
+                if image_id in self._golden_index:
+                    continue
+                if any(existing.image_id == image_id for existing in self._annotation):
+                    continue
                 cached_path = self._materialize_image(image_id, image_format, image_bytes)
                 self._all_image_index[image_id] = cached_path
                 width, height = _image_size(image_bytes)
@@ -714,12 +739,10 @@ def _golden_annotations_from_payload(
 
     hazard_class = str(payload.get("category") or "hazard").strip().lower().replace(" ", "_")
     severity = _severity_for_label(hazard_class)
-    reasoning = _reasoning_for_label(hazard_class, severity)
     return GoldenAnnotation(
         hazard_class=hazard_class,
         bounding_box=(x_min, y_min, x_max, y_max),
         severity=severity,
-        reasoning=reasoning,
     )
 
 
@@ -728,7 +751,6 @@ def golden_annotation_to_jsonable(record: GoldenAnnotation) -> dict:
         "hazard_class": record.hazard_class,
         "bounding_box": list(record.bounding_box),
         "severity": record.severity,
-        "reasoning": record.reasoning,
     }
 
 

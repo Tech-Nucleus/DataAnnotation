@@ -19,7 +19,7 @@ MINER_WALLET_HOTKEYS="${MINER_WALLET_HOTKEYS:-minerhk,minerhk2,minerhk3}"
 MINER_PORTS="${MINER_PORTS:-8091,8093,8094}"
 ADVERSARIAL_MINER_INDEX="${ADVERSARIAL_MINER_INDEX:--1}"
 ADVERSARIAL_MODE="${ADVERSARIAL_MODE:-malformed_manifest}"
-# Karpathy-style autoresearch on one miner (-1 = off)
+# Annotation-only miner matrix.
 AUTORESEARCH_MINER_INDEX="${AUTORESEARCH_MINER_INDEX:--1}"
 AUTORESEARCH_MAX_ITERS="${AUTORESEARCH_MAX_ITERS:-2}"
 AUTORESEARCH_EXPERIMENT_MINUTES="${AUTORESEARCH_EXPERIMENT_MINUTES:-1}"
@@ -83,14 +83,10 @@ for i in "${!NAMES[@]}"; do
     --subtensor.chain_endpoint "$CHAIN_ENDPOINT"
     --netuid "$NETUID"
     --axon.port "${PORTS[$i]}"
-    --miner.training_workspace "$ROOT_DIR/artifacts/miner_training/${HOTKEYS[$i]}"
-    --miner.response_mode "$mode"
+    --miner.annotation_workspace "$ROOT_DIR/artifacts/miner_annotation/${HOTKEYS[$i]}"
     --logging.debug
   )
-  if [[ "${AUTORESEARCH_MINER_INDEX}" != "-1" ]] && [[ "$i" -eq "${AUTORESEARCH_MINER_INDEX}" ]]; then
-    miner_cmd+=(--miner.autoresearch --miner.autoresearch_max_iters "$AUTORESEARCH_MAX_ITERS" --miner.autoresearch_experiment_minutes "$AUTORESEARCH_EXPERIMENT_MINUTES")
-    echo "[stress] miner[$i] Karpathy autoresearch enabled (iters=$AUTORESEARCH_MAX_ITERS minutes=$AUTORESEARCH_EXPERIMENT_MINUTES)"
-  fi
+  echo "[stress] miner[$i] annotation-only mode=$mode"
   "${miner_cmd[@]}" >"$log" 2>&1 &
   PIDS+=("$!")
 done
@@ -109,8 +105,6 @@ echo "[stress] starting validator log=$VLOG"
   --subtensor.chain_endpoint "$CHAIN_ENDPOINT" \
   --netuid "$NETUID" \
   --axon.port "$VALIDATOR_PORT" \
-  --neuron.max_training_seconds "$MAX_TRAINING_SECONDS" \
-  --neuron.training_timeout "$TRAINING_TIMEOUT" \
   --logging.debug >"$VLOG" 2>&1 &
 PIDS+=("$!")
 
@@ -124,10 +118,10 @@ python3 - <<PY
 from pathlib import Path
 import re
 log = Path("$VLOG").read_text(encoding="utf-8", errors="ignore")
-training_ok = len(re.findall(r"event=artifact_verification .*task_type=training .*passed=True", log))
-golden_payloads = len(re.findall(r"event=evaluator_golden_score_payload", log))
-validation_errors = len(re.findall(r"Error during validation step|Challenge nonce mismatch|Mismatched task_id|Invalid .* manifest", log))
-print(f"  training_ok={training_ok}")
+annotation_rounds = len(re.findall(r"event=annotation_flywheel_round_done", log))
+golden_payloads = len(re.findall(r"event=annotation_flywheel_round_start", log))
+validation_errors = len(re.findall(r"Error during validation step|Challenge nonce mismatch|Mismatched task_id|Miner response missing annotations_uri", log))
+print(f"  annotation_rounds={annotation_rounds}")
 print(f"  golden_payloads={golden_payloads}")
 print(f"  validation_errors={validation_errors}")
 PY

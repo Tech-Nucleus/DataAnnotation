@@ -1,7 +1,7 @@
 """End-to-end tests for the dual-flywheel validator pipeline.
 
 The tests bypass HuggingFace dataset downloads by constructing an
-``ImageCorpus`` with synthetic images plus hand-built Golden / Training /
+``ImageCorpus`` with synthetic images plus hand-built Golden /
 Annotation / Benchmark records. This exercises every scoring lane,
 the injection planner, the dataset assembler, the commercial export,
 and the final reward composer using only in-memory state.
@@ -21,26 +21,31 @@ import pytest
 from template.hazard.annotation_eval import (
     AnnotationFidelityScorer,
     ConsensusScorer,
-    cosine_similarity,
     evaluate_round_annotations,
     iou_xyxy,
+    _ReliabilityAccumulator,
 )
 from template.hazard.dataset_assembler import (
+    AggregatedObject,
     AdoptionLedger,
     DatasetAssembler,
+    MinerVote,
     WinningAnnotation,
 )
 from template.hazard.dual_reward import DualFlywheelRewardComposer
-from template.hazard.golden_injection import GoldenInjector
 from template.hazard.image_corpus import (
     BenchmarkImage,
     GoldenAnnotation,
     GoldenImage,
     ImageCorpus,
     ImageCorpusConfig,
-    TrainingImage,
     UnlabeledImage,
     _severity_for_label,
+)
+from template.protocol import PerImageAnnotationItem
+from template.validator.dual_forward import (
+    _build_full_dataset_plan,
+    _build_round_annotation_plan,
 )
 
 
@@ -55,7 +60,6 @@ def test_image_corpus_normalized_annotation_entries_parses_at_split(tmp_path: Pa
         ("baz/qux", "validation"),
         ("plain/id", "train"),
     ]
-from template.protocol import PerImageAnnotationItem
 
 
 def _png_bytes(width: int, height: int, color=(120, 140, 160)) -> bytes:
@@ -96,7 +100,6 @@ def _build_synthetic_corpus(tmp_path: Path) -> ImageCorpus:
                 hazard_class="missing_hardhat",
                 bounding_box=(20, 30, 90, 130),
                 severity="high",
-                reasoning="Worker without hardhat near scaffold.",
             ),
         ),
     )
@@ -117,7 +120,6 @@ def _build_synthetic_corpus(tmp_path: Path) -> ImageCorpus:
                 hazard_class="fall_protection",
                 bounding_box=(10, 20, 60, 90),
                 severity="high",
-                reasoning="Unprotected edge with fall hazard.",
             ),
         ),
     )
@@ -140,29 +142,6 @@ def _build_synthetic_corpus(tmp_path: Path) -> ImageCorpus:
             )
         )
 
-    # Two training pool images (labeled).
-    for idx, color in enumerate([(10, 20, 30), (200, 200, 200)]):
-        payload = _png_bytes(192, 192, color)
-        img_id = hashlib.sha256(payload).hexdigest()
-        path = _materialize(img_id, payload)
-        corpus._training.append(
-            TrainingImage(
-                image_id=img_id,
-                image_path=path,
-                image_url=path.as_uri(),
-                width=192,
-                height=192,
-                annotations=(
-                    GoldenAnnotation(
-                        hazard_class="missing_vest",
-                        bounding_box=(30, 30, 90, 100),
-                        severity="high",
-                        reasoning="Missing safety vest in active work area.",
-                    ),
-                ),
-            )
-        )
-
     # One benchmark image.
     bench_bytes = _png_bytes(220, 220, (10, 10, 10))
     bench_id = hashlib.sha256(bench_bytes).hexdigest()
@@ -178,7 +157,6 @@ def _build_synthetic_corpus(tmp_path: Path) -> ImageCorpus:
                     hazard_class="fall_protection",
                     bounding_box=(30, 40, 100, 150),
                     severity="high",
-                    reasoning="Fall hazard near edge.",
                 ),
             ),
             source_dataset="synthetic-benchmark",
@@ -205,23 +183,13 @@ def test_iou_basic():
     assert iou_xyxy([0, 0, 10, 10], [5, 5, 15, 15]) == pytest.approx(25 / 175, rel=1e-4)
 
 
-def test_cosine_similarity_for_overlapping_text():
-    from template.hazard.annotation_eval import _embed_text
-
-    a = _embed_text("Worker without hardhat near scaffold.")
-    b = _embed_text("Construction worker missing hardhat next to scaffolding.")
-    c = _embed_text("Spilled coffee near a desk in an office.")
-    assert cosine_similarity(a, b) > cosine_similarity(a, c)
-
-
 # ---------------------------------------------------------------------------
-# Image corpus + golden injection
+# Image corpus + full-dataset plan
 # ---------------------------------------------------------------------------
 
 def test_synthetic_corpus_builds(tmp_path):
     corpus = _build_synthetic_corpus(tmp_path)
     assert len(corpus.golden_images()) == 2
-    assert len(corpus.training_images()) == 2
     assert len(corpus.annotation_images()) == 3
     assert len(corpus.benchmark_images()) == 1
     g1 = corpus.golden_images()[0]
@@ -229,23 +197,34 @@ def test_synthetic_corpus_builds(tmp_path):
     assert corpus.golden_lookup(g1.image_id) is g1
 
 
-def test_golden_injector_distributes_correctly(tmp_path):
+def test_full_dataset_plan_contains_golden_and_annotation_images(tmp_path):
     corpus = _build_synthetic_corpus(tmp_path)
-    injector = GoldenInjector(corpus=corpus, request_size=4, golden_per_request=2)
-    rng = random.Random(42)
-    plan = injector.build_plan(rng)
-    assert len(plan.ordered_images) == 4
+    plan = _build_full_dataset_plan(corpus)
+    assert len(plan.ordered_images) == 5
     assert len(plan.golden_image_ids) == 2
-    assert len(plan.annotation_image_ids) == 2
+    assert len(plan.annotation_image_ids) == 3
     all_ids = {iid for iid, _ in plan.ordered_images}
     assert all_ids == set(plan.golden_image_ids) | set(plan.annotation_image_ids)
 
 
-def test_golden_injector_rejects_oversize_request(tmp_path):
+def test_round_annotation_plan_honors_request_size_and_golden_injection(tmp_path):
     corpus = _build_synthetic_corpus(tmp_path)
-    with pytest.raises(RuntimeError):
-        injector = GoldenInjector(corpus=corpus, request_size=10, golden_per_request=2)
-        injector.build_plan(random.Random(1))
+
+    class Ns:
+        pass
+
+    self_obj = Ns()
+    self_obj.random = random.Random(7)
+    self_obj.config = Ns()
+    self_obj.config.neuron = Ns()
+    self_obj.config.neuron.flywheel_annotation_request_size = 4
+    self_obj.config.neuron.flywheel_golden_injection_per_request = 2
+
+    plan = _build_round_annotation_plan(self_obj, corpus)
+    assert len(plan.ordered_images) == 4
+    assert len(plan.golden_image_ids) == 2
+    assert len(plan.annotation_image_ids) == 2
+    assert len({iid for iid, _ in plan.ordered_images}) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -256,17 +235,10 @@ def _miner_item(
     *,
     cls: str = "missing_hardhat",
     bbox=(22, 32, 92, 132),
-    severity: str = "high",
-    confidence: float = 0.9,
-    reasoning: str = "Worker missing hardhat near scaffold.",
 ) -> PerImageAnnotationItem:
     return PerImageAnnotationItem(
         hazard_class=cls,
         bounding_box=list(bbox),
-        severity=severity,
-        confidence=confidence,
-        reasoning_chain=reasoning,
-        osha_reference="29CFR1926.95",
     )
 
 
@@ -277,7 +249,6 @@ def test_fidelity_scorer_high_quality_match(tmp_path):
     components = scorer.score([_miner_item()], g1)
     assert components.iou > 0.7
     assert components.class_severity == pytest.approx(1.0)
-    assert components.reasoning > 0.3
     assert components.hallucination_penalty == 1.0
     assert components.fidelity > 0.6
     assert components.matched_count == 1
@@ -290,8 +261,6 @@ def test_fidelity_scorer_penalizes_hallucinations(tmp_path):
     halluc = _miner_item(
         cls="random_object",
         bbox=(140, 140, 180, 180),
-        severity="low",
-        reasoning="Saw something unrelated.",
     )
     components = scorer.score([_miner_item(), halluc], g1)
     assert components.hallucinated_count == 1
@@ -307,8 +276,6 @@ def test_fidelity_scorer_zeros_for_total_miss(tmp_path):
         _miner_item(
             cls="random_class",
             bbox=(150, 150, 175, 175),
-            severity="low",
-            reasoning="unrelated",
         )
     ]
     components = scorer.score(items, g1)
@@ -338,6 +305,51 @@ def test_consensus_scorer_zero_peers():
     comp = scorer.score(miner_items, {})
     assert comp.consensus == 0.0
     assert comp.peer_count == 0
+
+
+def test_evaluate_round_annotations_penalizes_missing_golden(tmp_path):
+    corpus = _build_synthetic_corpus(tmp_path)
+    g1 = corpus.golden_images()[0]
+    annotations_by_uid = {
+        1: {g1.image_id: [_miner_item()]},
+        2: {},
+    }
+    scores = evaluate_round_annotations(
+        corpus=corpus,
+        annotations_by_uid=annotations_by_uid,
+        fidelity_scorer=AnnotationFidelityScorer(),
+        consensus_scorer=ConsensusScorer(),
+        hallucination_penalty=0.5,
+        golden_missing_penalty=0.5,
+    )
+    assert scores[2].golden_missing_count == len(corpus.golden_images())
+    assert scores[2].average_score(golden_missing_penalty=0.5) < scores[1].average_score(
+        golden_missing_penalty=0.5
+    )
+
+
+def test_evaluate_round_annotations_only_penalizes_missing_injected_golden(tmp_path):
+    corpus = _build_synthetic_corpus(tmp_path)
+    g1, g2 = corpus.golden_images()
+    annotations_by_uid = {
+        1: {g1.image_id: [_miner_item()]},
+        2: {},
+    }
+    scores = evaluate_round_annotations(
+        corpus=corpus,
+        annotations_by_uid=annotations_by_uid,
+        fidelity_scorer=AnnotationFidelityScorer(),
+        consensus_scorer=ConsensusScorer(),
+        hallucination_penalty=0.5,
+        golden_missing_penalty=0.5,
+        expected_golden_ids_by_uid={
+            1: [g1.image_id],
+            2: [g1.image_id],
+        },
+    )
+    assert scores[1].golden_missing_count == 0
+    assert scores[2].golden_missing_count == 1
+    assert g2.image_id not in scores[2].fidelity_scores_by_image_id
 
 
 def test_evaluate_round_annotations_aggregates_correctly(tmp_path):
@@ -406,19 +418,45 @@ def test_dataset_assembler_picks_best_per_image_id(tmp_path):
 def test_dataset_assembler_export_local_jsonl(tmp_path):
     corpus = _build_synthetic_corpus(tmp_path)
     pool = corpus.annotation_images()[0]
-    items = [_miner_item()]
+    vote = MinerVote(
+        miner_uid=7,
+        miner_hotkey="hk7",
+        class_voted="missing_hardhat",
+        severity_voted="high",
+        confidence=0.91,
+        bounding_box=(22, 32, 92, 132),
+        reliability_weight_at_aggregation=0.9,
+    )
+    obj = AggregatedObject(
+        object_cluster_id=f"{pool.image_id}-cluster-0",
+        accepted_hazard_class="missing_hardhat",
+        accepted_severity="high",
+        confidence=0.94,
+        severity_confidence=0.91,
+        class_posterior_distribution={"missing_hardhat": 0.94, "_background": 0.06},
+        severity_posterior_distribution={"high": 0.91, "medium": 0.09},
+        fused_bounding_box=(22, 32, 92, 132),
+        spatial_mean_iou_to_median=0.95,
+        miner_votes=[vote],
+        escalation_reason=None,
+    )
     winners = [
         WinningAnnotation(
             image_id=pool.image_id,
-            chosen_uid=7,
             score=0.85,
+            chosen_uid=7,
             is_golden=False,
+            aggregation_method="bayesian_dawid_skene_v1",
             image_url=pool.image_url,
             width=pool.width,
             height=pool.height,
-            items=items,
-            miner_hotkey="hk7",
-            model_version="m" * 32,
+            escalation_required=False,
+            escalation_reason=None,
+            accepted_objects=[obj],
+            miner_contribution_scores={7: 1.0},
+            reliability_window="2026-05-10T12:00:00Z/2026-05-11T12:00:00Z",
+            acceptance_thresholds={"confidence": 0.9, "severity_confidence": 0.8, "min_voters": 2},
+            validator_version="1.2.0",
             timestamp="2026-05-09T16:00:00Z",
         )
     ]
@@ -431,6 +469,8 @@ def test_dataset_assembler_export_local_jsonl(tmp_path):
     parsed = [json.loads(line) for line in master.read_text().splitlines() if line.strip()]
     assert parsed[0]["image_id"] == pool.image_id
     assert parsed[0]["chosen_uid"] == 7
+    assert parsed[0]["aggregation_method"] == "bayesian_dawid_skene_v1"
+    assert parsed[0]["objects"][0]["accepted_hazard_class"] == "missing_hardhat"
 
 
 def test_dataset_assembler_export_excludes_golden_rows(tmp_path):
@@ -440,28 +480,38 @@ def test_dataset_assembler_export_excludes_golden_rows(tmp_path):
     winners = [
         WinningAnnotation(
             image_id=g1.image_id,
-            chosen_uid=1,
             score=0.9,
+            chosen_uid=1,
             is_golden=True,
+            aggregation_method="golden_fidelity_v1",
             image_url=g1.image_url,
             width=g1.width,
             height=g1.height,
-            items=[_miner_item()],
-            miner_hotkey="hk1",
-            model_version="m" * 32,
+            escalation_required=False,
+            escalation_reason=None,
+            accepted_objects=[],
+            miner_contribution_scores={1: 1.0},
+            reliability_window="w",
+            acceptance_thresholds={"confidence": 0.9, "severity_confidence": 0.8, "min_voters": 2},
+            validator_version="1.2.0",
             timestamp="2026-05-09T16:00:00Z",
         ),
         WinningAnnotation(
             image_id=pool.image_id,
-            chosen_uid=2,
             score=0.7,
+            chosen_uid=2,
             is_golden=False,
+            aggregation_method="bayesian_dawid_skene_v1",
             image_url=pool.image_url,
             width=pool.width,
             height=pool.height,
-            items=[_miner_item(cls="trip_hazard")],
-            miner_hotkey="hk2",
-            model_version="m" * 32,
+            escalation_required=False,
+            escalation_reason=None,
+            accepted_objects=[],
+            miner_contribution_scores={2: 1.0},
+            reliability_window="w",
+            acceptance_thresholds={"confidence": 0.9, "severity_confidence": 0.8, "min_voters": 2},
+            validator_version="1.2.0",
             timestamp="2026-05-09T16:00:01Z",
         ),
     ]
@@ -482,15 +532,20 @@ def test_dataset_assembler_export_skips_when_only_golden_winners(tmp_path):
     winners = [
         WinningAnnotation(
             image_id=g1.image_id,
-            chosen_uid=1,
             score=0.9,
+            chosen_uid=1,
             is_golden=True,
+            aggregation_method="golden_fidelity_v1",
             image_url=g1.image_url,
             width=g1.width,
             height=g1.height,
-            items=[_miner_item()],
-            miner_hotkey="hk1",
-            model_version="m" * 32,
+            escalation_required=False,
+            escalation_reason=None,
+            accepted_objects=[],
+            miner_contribution_scores={1: 1.0},
+            reliability_window="w",
+            acceptance_thresholds={"confidence": 0.9, "severity_confidence": 0.8, "min_voters": 2},
+            validator_version="1.2.0",
             timestamp="2026-05-09T16:00:00Z",
         ),
     ]
@@ -528,57 +583,22 @@ def test_dual_reward_composer_combines_three_signals(tmp_path):
         timestamps={1: "ts1", 2: "ts2"},
     )
 
-    from template.hazard.model_eval import ModelAccuracyComponents
-    model_accuracy = {
-        1: ModelAccuracyComponents(
-            golden_iou=0.9,
-            golden_class_severity=1.0,
-            golden_reasoning=0.7,
-            golden_confidence=0.8,
-            golden_score=0.85,
-            benchmark_iou=0.6,
-            benchmark_score=0.6,
-            overall_score=0.78,
-            images_scored=2,
-        ),
-        2: ModelAccuracyComponents(
-            golden_iou=0.2,
-            golden_class_severity=0.0,
-            golden_reasoning=0.1,
-            golden_confidence=0.2,
-            golden_score=0.15,
-            benchmark_iou=0.2,
-            benchmark_score=0.2,
-            overall_score=0.17,
-            images_scored=2,
-        ),
-    }
-
-    composer = DualFlywheelRewardComposer(alpha=0.4, beta=0.4, gamma=0.2)
+    composer = DualFlywheelRewardComposer(alpha=0.7)
     rewards, breakdowns = composer.compose(
         uids=[1, 2],
         annotation_scores=scores,
-        model_accuracy=model_accuracy,
         ledger=assembler.ledger,
         round_winners=winners,
     )
     assert rewards[0] > rewards[1]  # uid 1 should clearly win
     assert breakdowns[0].annotation_score > 0.0
-    assert breakdowns[0].model_accuracy_score > 0.0
-    assert breakdowns[0].adoption_bonus > 0.0
+    assert breakdowns[0].adoption_bonus >= 0.0
     assert breakdowns[0].final_score == pytest.approx(rewards[0], abs=1e-6)
 
 
-def test_dual_reward_composer_validates_weights():
-    composer = DualFlywheelRewardComposer(alpha=0.5, beta=0.4, gamma=0.2)  # sums to 1.1
+def test_dual_reward_composer_rejects_invalid_alpha():
     with pytest.raises(ValueError):
-        composer.compose(
-            uids=[1],
-            annotation_scores={},
-            model_accuracy={},
-            ledger=AdoptionLedger(),
-            round_winners=[],
-        )
+        DualFlywheelRewardComposer(alpha=1.5)
 
 
 # ---------------------------------------------------------------------------
@@ -589,9 +609,37 @@ def test_adoption_ledger_round_trips():
     ledger = AdoptionLedger()
     ledger.adoption_counts = {1: 5, 2: 3}
     ledger.last_round_counts = {1: 2}
+    ledger.adoption_contributions = {1: 2.5, 2: 1.0}
+    ledger.last_round_contributions = {1: 0.8}
     ledger.rounds_observed = 7
     serialized = ledger.to_jsonable()
     restored = AdoptionLedger.from_jsonable(serialized)
     assert restored.adoption_counts == {1: 5, 2: 3}
     assert restored.last_round_counts == {1: 2}
+    assert restored.adoption_contributions == {1: 2.5, 2: 1.0}
+    assert restored.last_round_contributions == {1: 0.8}
     assert restored.rounds_observed == 7
+
+
+# ---------------------------------------------------------------------------
+# Reliability accumulator serialization/decay
+# ---------------------------------------------------------------------------
+
+def test_reliability_accumulator_serialization_and_decay(tmp_path):
+    corpus = _build_synthetic_corpus(tmp_path)
+    g1 = corpus.golden_images()[0]
+    acc = _ReliabilityAccumulator(decay=0.9)
+    acc.update(1, [_miner_item()], g1)
+    acc.update(2, [_miner_item(cls="other", bbox=(150, 150, 170, 170))], g1)
+
+    # Verify serialization
+    data = acc.to_jsonable()
+    restored = _ReliabilityAccumulator.from_jsonable(data)
+    assert restored.tp[1]["missing_hardhat"] == 1.0
+    assert restored.fp[2]["other"] == 1.0
+
+    # Verify decay
+    restored.decay = 0.5
+    restored.decay_all()
+    assert restored.tp[1]["missing_hardhat"] == 0.5
+    assert restored.fp[2]["other"] == 0.5

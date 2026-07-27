@@ -18,6 +18,7 @@
 import copy
 import typing
 
+import template.compat.bittensor_commit_hotkey  # noqa: F401 — drand hotkey shim for bittensor 9.7
 import bittensor as bt
 
 from abc import ABC, abstractmethod

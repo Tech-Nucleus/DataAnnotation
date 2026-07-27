@@ -19,7 +19,7 @@ RUN_SECONDS="${RUN_SECONDS:-180}"
 ENABLE_AUTORESEARCH="${ENABLE_AUTORESEARCH:-0}"
 AUTORESEARCH_MAX_ITERS="${AUTORESEARCH_MAX_ITERS:-1}"
 AUTORESEARCH_EXPERIMENT_MINUTES="${AUTORESEARCH_EXPERIMENT_MINUTES:-1}"
-# Optional explicit dendrite timeout for training tasks (seconds). 0 = use validator default logic.
+# Optional explicit dendrite timeout for annotation tasks (seconds). 0 = use validator default logic.
 TRAINING_TIMEOUT="${TRAINING_TIMEOUT:-0}"
 MINER_RESPONSE_MODE="${MINER_RESPONSE_MODE:-standard}"
 # Single-miner E2E: only sample one UID and pin queries to this hotkey (avoids stale on-chain "serving" peers).
@@ -127,18 +127,9 @@ MINER_CMD=(
   --subtensor.chain_endpoint "$CHAIN_ENDPOINT"
   --netuid "$NETUID"
   --axon.port "$MINER_PORT"
-  --miner.training_workspace "$ROOT_DIR/artifacts/miner_training"
-  --miner.response_mode "$MINER_RESPONSE_MODE"
+  --miner.annotation_workspace "$ROOT_DIR/artifacts/miner_annotation"
   --logging.debug
 )
-
-if [[ "$ENABLE_AUTORESEARCH" == "1" ]]; then
-  MINER_CMD+=(
-    --miner.autoresearch
-    --miner.autoresearch_max_iters "$AUTORESEARCH_MAX_ITERS"
-    --miner.autoresearch_experiment_minutes "$AUTORESEARCH_EXPERIMENT_MINUTES"
-  )
-fi
 
 VALIDATOR_CMD=(
   "$NEURON_PYTHON" "$ROOT_DIR/neurons/validator.py"
@@ -149,13 +140,9 @@ VALIDATOR_CMD=(
   --subtensor.chain_endpoint "$CHAIN_ENDPOINT"
   --netuid "$NETUID"
   --axon.port "$VALIDATOR_PORT"
-  --neuron.max_training_seconds "$MAX_TRAINING_SECONDS"
   --neuron.sample_size "$NEURON_SAMPLE_SIZE"
   --logging.debug
 )
-if [[ "${TRAINING_TIMEOUT:-0}" =~ ^[0-9]+$ ]] && [[ "${TRAINING_TIMEOUT}" -gt 0 ]]; then
-  VALIDATOR_CMD+=(--neuron.training_timeout "$TRAINING_TIMEOUT")
-fi
 
 log "Starting miner..."
 "${MINER_CMD[@]}" >"$MINER_LOG" 2>&1 &

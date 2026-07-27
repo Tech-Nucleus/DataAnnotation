@@ -63,10 +63,6 @@ CMD=(
   --subtensor.network finney
   --netuid "$NETUID"
   --axon.port "$VALIDATOR_PORT"
-  --neuron.dataset_root "$DATASET_ROOT"
-  --neuron.baseline_checkpoint_uri "$BASELINE_URI"
-  --neuron.max_training_seconds "$MAX_TRAINING_SECONDS"
-  --neuron.training_timeout "$TRAINING_TIMEOUT"
   --logging.debug
 )
 

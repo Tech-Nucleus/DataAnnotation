@@ -1,37 +1,27 @@
-"""
-Anti-plagiarism helpers: structure hashes for miner annotations and a registry
-of first-claim subnet UIDs per model checkpoint hash.
-"""
+"""Anti-plagiarism helpers for annotation-only miner submissions."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Dict, Mapping, MutableMapping, Sequence, Tuple
-
-import bittensor as bt
+from typing import Dict, Mapping, Sequence, Tuple
 
 from template.protocol import PerImageAnnotationItem
 
 
 def fingerprint_annotation_items(items: Sequence[PerImageAnnotationItem]) -> str:
-    """Stable hash over sorted annotation rows (structure + reasoning text)."""
+    """Stable hash over sorted annotation rows."""
 
     rows = []
     for it in sorted(
         items,
-        key=lambda x: (x.hazard_class.lower(), tuple(x.bounding_box), str(x.severity)),
+        key=lambda x: (x.hazard_class.lower(), tuple(x.bounding_box)),
     ):
         rows.append(
             {
                 "hazard_class": it.hazard_class.strip().lower(),
-                "bounding_box": [int(b) for b in it.bounding_box],
-                "severity": str(it.severity),
-                "confidence": round(float(it.confidence), 4),
-                "reasoning_chain": it.reasoning_chain.strip(),
-                "osha_reference": (it.osha_reference or "").strip(),
+                "bounding_box": [float(b) for b in it.bounding_box],
             }
         )
     payload = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -87,45 +77,3 @@ class AnnotationDuplicateTracker:
             if fp not in bucket:
                 bucket[fp] = uid
         return True, ""
-
-
-@dataclass
-class ModelHashClaimRegistry:
-    """Maps checkpoint content hash to the first subnet UID that produced it."""
-
-    hash_to_uid: MutableMapping[str, int] = field(default_factory=dict)
-
-    @classmethod
-    def load(cls, path: Path) -> "ModelHashClaimRegistry":
-        if not path.is_file():
-            return cls()
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            bt.logging.warning(f"event=model_hash_registry_load_failed path={path} err={exc}")
-            return cls()
-        raw = data.get("model_hash_first_uid") or {}
-        mapping: Dict[str, int] = {}
-        for k, v in raw.items():
-            try:
-                mapping[str(k)] = int(v)
-            except (TypeError, ValueError):
-                continue
-        return cls(hash_to_uid=mapping)
-
-    def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"model_hash_first_uid": dict(self.hash_to_uid)}
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-
-    def uid_may_use_model_hash(self, uid: int, model_hash: str) -> Tuple[bool, str]:
-        h = (model_hash or "").strip().lower()
-        if not h:
-            return False, "empty model hash"
-        prior = self.hash_to_uid.get(h)
-        if prior is None:
-            self.hash_to_uid[h] = int(uid)
-            return True, ""
-        if int(prior) == int(uid):
-            return True, ""
-        return False, f"checkpoint hash already attributed to uid {prior}"

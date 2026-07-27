@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Operator matrix: 3 miners (1 Karpathy autoresearch, 2 random HPO) + validator with paced steps.
+# Operator matrix: 3 annotation-only miners + validator with paced steps.
 # First-time chain: scripts/bootstrap_localnet_and_register.sh (or your own subnet + register flow).
 # Prerequisites: local subtensor RPC (default ws://127.0.0.1:9944), miner+validator registered on NETUID;
 # Cloudflare R2 env vars set for real uploads.
@@ -8,6 +8,12 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+# Optional: shared staging credentials (same bucket, per-miner prefixes below).
+if [[ -f "$ROOT_DIR/staging.env" ]]; then
+  # shellcheck source=/dev/null
+  set -a && source "$ROOT_DIR/staging.env" && set +a
+fi
 
 NEURON_PYTHON="${NEURON_PYTHON:-$ROOT_DIR/.venv-neurons/bin/python}"
 PYTHON_BIN="${PYTHON_BIN:-$NEURON_PYTHON}"
@@ -21,12 +27,21 @@ VALIDATOR_WALLET_NAME="${VALIDATOR_WALLET_NAME:-validator}"
 VALIDATOR_WALLET_HOTKEY="${VALIDATOR_WALLET_HOTKEY:-valhk}"
 VALIDATOR_PORT="${VALIDATOR_PORT:-8092}"
 
-# Miner 0: Karpathy loop | Miner 1–2: random HPO (distinct seeds)
-MINER_WALLET_NAMES="${MINER_WALLET_NAMES:-miner,miner2,miner3}"
-MINER_WALLET_HOTKEYS="${MINER_WALLET_HOTKEYS:-minerhk,minerhk2,minerhk3}"
-MINER_PORTS="${MINER_PORTS:-8091,8093,8094}"
-# R2 key roots per miner (same bucket, separate directories)
-R2_PREFIXES="${R2_PREFIXES:-miners/m1_karpathy,miners/m2_rand_hpo,miners/m3_rand_hpo}"
+# All miners follow the annotation-only path and may use different external VLM configurations.
+# MINER_COUNT=2 when local subnet is full at 4 neurons (owner + validator + 2 miners).
+MINER_COUNT="${MINER_COUNT:-3}"
+if [[ "$MINER_COUNT" -eq 2 ]]; then
+  MINER_WALLET_NAMES="${MINER_WALLET_NAMES:-miner,miner2}"
+  MINER_WALLET_HOTKEYS="${MINER_WALLET_HOTKEYS:-minerhk,minerhk2}"
+  MINER_PORTS="${MINER_PORTS:-8091,8093}"
+  R2_PREFIXES="${R2_PREFIXES:-miners/m1_karpathy,miners/m2_rand_hpo}"
+  NEURON_SAMPLE_SIZE="${NEURON_SAMPLE_SIZE:-2}"
+else
+  MINER_WALLET_NAMES="${MINER_WALLET_NAMES:-miner,miner2,miner3}"
+  MINER_WALLET_HOTKEYS="${MINER_WALLET_HOTKEYS:-minerhk,minerhk2,minerhk3}"
+  MINER_PORTS="${MINER_PORTS:-8091,8093,8094}"
+  R2_PREFIXES="${R2_PREFIXES:-miners/m1_karpathy,miners/m2_rand_hpo,miners/m3_rand_hpo}"
+fi
 
 RUN_SECONDS="${RUN_SECONDS:-600}"
 MAX_TRAINING_SECONDS="${MAX_TRAINING_SECONDS:-300}"
@@ -109,10 +124,14 @@ PY
 
 register_extra_if_needed() {
   log "Registering extra miners (AUTO_FUND from owner if set)..."
+  local extra_default="miner2:minerhk2,miner3:minerhk3"
+  if [[ "$MINER_COUNT" -eq 2 ]]; then
+    extra_default="miner2:minerhk2"
+  fi
   AUTO_FUND="${REGISTER_AUTO_FUND:-1}" FUNDER_WALLET="${FUNDER_WALLET:-owner}" \
     FUND_AMOUNT="${FUND_AMOUNT_REGISTER:-2.0}" \
     NETUID="$NETUID" CHAIN_ENDPOINT="$CHAIN_ENDPOINT" WALLET_PATH="$WALLET_PATH" \
-    EXTRA_MINERS="${EXTRA_MINERS:-miner2:minerhk2,miner3:minerhk3}" \
+    EXTRA_MINERS="${EXTRA_MINERS:-$extra_default}" \
     bash "$ROOT_DIR/scripts/register_extra_miners_localnet.sh" || true
 }
 
@@ -127,6 +146,12 @@ register_extra_if_needed
 
 unset LOCALNET_TARGET_MINER_SS58 || true
 export PYTHONPATH="$ROOT_DIR"
+# On local ws RPC, validator skips set_weights unless forced (neurons/validator.py).
+case "${CHAIN_ENDPOINT:-}" in
+  ws://127.0.0.1:*|ws://localhost:*)
+    export FORCE_LOCAL_SET_WEIGHTS="${FORCE_LOCAL_SET_WEIGHTS:-1}"
+    ;;
+esac
 export MINER_MAX_TRAIN_SAMPLES="${MINER_MAX_TRAIN_SAMPLES:-24}"
 export MINER_MAX_VAL_SAMPLES="${MINER_MAX_VAL_SAMPLES:-8}"
 export MINER_MAX_EPOCHS="${MINER_MAX_EPOCHS:-1}"
@@ -139,15 +164,16 @@ IFS=',' read -r -a NAMES <<< "$MINER_WALLET_NAMES"
 IFS=',' read -r -a HOTKEYS <<< "$MINER_WALLET_HOTKEYS"
 IFS=',' read -r -a PORTS <<< "$MINER_PORTS"
 IFS=',' read -r -a PREFIXES <<< "$R2_PREFIXES"
+IFS=',' read -r -a BACKENDS <<< "${MINER_BACKENDS:-yolo,yolo,yolo}"
 
-if [[ "${#NAMES[@]}" -ne 3 || "${#HOTKEYS[@]}" -ne 3 || "${#PORTS[@]}" -ne 3 || "${#PREFIXES[@]}" -ne 3 ]]; then
-  log "ERROR: need 3 entries each: MINER_WALLET_NAMES, MINER_WALLET_HOTKEYS, MINER_PORTS, R2_PREFIXES."
+if [[ "${#NAMES[@]}" -ne "$MINER_COUNT" || "${#HOTKEYS[@]}" -ne "$MINER_COUNT" || "${#PORTS[@]}" -ne "$MINER_COUNT" || "${#PREFIXES[@]}" -ne "$MINER_COUNT" ]]; then
+  log "ERROR: need MINER_COUNT=$MINER_COUNT entries each: MINER_WALLET_NAMES, MINER_WALLET_HOTKEYS, MINER_PORTS, R2_PREFIXES."
   exit 1
 fi
 
 # Route dendrite to real listen ports (chain axon ports are often stale on single-host localnet).
 SS58_MAP=""
-for i in 0 1 2; do
+for ((i = 0; i < MINER_COUNT; i++)); do
   ss58="$("$NEURON_PYTHON" - "$WALLET_PATH" "${NAMES[$i]}" "${HOTKEYS[$i]}" <<'PY'
 import bittensor as bt, sys
 path, name, hk = sys.argv[1:4]
@@ -169,7 +195,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for i in 0 1 2; do
+for ((i = 0; i < MINER_COUNT; i++)); do
   mlog="$LOG_DIR/miner_${i}_${STAMP}.log"
   cmd=(
     "$PYTHON_BIN" "$ROOT_DIR/neurons/miner.py"
@@ -180,20 +206,12 @@ for i in 0 1 2; do
     --subtensor.chain_endpoint "$CHAIN_ENDPOINT"
     --netuid "$NETUID"
     --axon.port "${PORTS[$i]}"
-    --miner.training_workspace "$ROOT_DIR/artifacts/miner_training/${HOTKEYS[$i]}"
+    --miner.annotation_workspace "$ROOT_DIR/artifacts/miner_annotation/${HOTKEYS[$i]}"
     --miner.dual_flywheel_r2_prefix "${PREFIXES[$i]}"
-    --miner.annotation_backend "${MINER_ANNOTATION_BACKEND:-yolo}"
+    --miner.annotation_backend "${BACKENDS[$i]:-${MINER_ANNOTATION_BACKEND:-yolo}}"
     --logging.debug
   )
-  if [[ "$i" -eq 0 ]]; then
-    cmd+=(--miner.autoresearch --miner.autoresearch_max_iters "$AUTORESEARCH_MAX_ITERS" \
-      --miner.autoresearch_experiment_minutes "$AUTORESEARCH_EXPERIMENT_MINUTES")
-    log "miner[$i] Karpathy autoresearch R2=${PREFIXES[$i]} log=$mlog"
-  else
-    seed=$(( 17 + i * 97 ))
-    cmd+=(--miner.random_hpo_draw --miner.hpo_seed "$seed")
-    log "miner[$i] random_hpo seed=$seed R2=${PREFIXES[$i]} log=$mlog"
-  fi
+  log "miner[$i] backend=${BACKENDS[$i]:-yolo} R2=${PREFIXES[$i]} log=$mlog"
   "${cmd[@]}" >"$mlog" 2>&1 &
   PIDS+=("$!")
 done
@@ -205,20 +223,28 @@ sleep "$MINER_WARMUP_SECONDS"
 vlog="$LOG_DIR/validator_${STAMP}.log"
 log "validator forward_step_sleep=${FORWARD_STEP_SLEEP_SECONDS}s log=$vlog"
 
-"$PYTHON_BIN" "$ROOT_DIR/neurons/validator.py" \
-  --wallet.name "$VALIDATOR_WALLET_NAME" \
-  --wallet.hotkey "$VALIDATOR_WALLET_HOTKEY" \
-  --wallet.path "$WALLET_PATH" \
-  --subtensor.network local \
-  --subtensor.chain_endpoint "$CHAIN_ENDPOINT" \
-  --netuid "$NETUID" \
-  --axon.port "$VALIDATOR_PORT" \
-  --neuron.task_mode dual_flywheel \
-  --neuron.sample_size "$NEURON_SAMPLE_SIZE" \
-  --neuron.max_training_seconds "$MAX_TRAINING_SECONDS" \
-  --neuron.training_timeout "$TRAINING_TIMEOUT" \
-  --neuron.forward_step_sleep_seconds "$FORWARD_STEP_SLEEP_SECONDS" \
-  --logging.debug >"$vlog" 2>&1 &
+VALIDATOR_CMD=(
+  "$PYTHON_BIN" "$ROOT_DIR/neurons/validator.py"
+  --wallet.name "$VALIDATOR_WALLET_NAME"
+  --wallet.hotkey "$VALIDATOR_WALLET_HOTKEY"
+  --wallet.path "$WALLET_PATH"
+  --subtensor.network local
+  --subtensor.chain_endpoint "$CHAIN_ENDPOINT"
+  --netuid "$NETUID"
+  --axon.port "$VALIDATOR_PORT"
+  --neuron.sample_size "$NEURON_SAMPLE_SIZE"
+  --neuron.forward_step_sleep_seconds "$FORWARD_STEP_SLEEP_SECONDS"
+  --logging.debug
+)
+[[ -n "${FLYWHEEL_COCO_MANIFEST:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_coco_manifest "$FLYWHEEL_COCO_MANIFEST")
+[[ -n "${FLYWHEEL_COMMERCIAL_DATASET_PREFIX:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_commercial_dataset_prefix "$FLYWHEEL_COMMERCIAL_DATASET_PREFIX")
+[[ -n "${FLYWHEEL_IMAGE_CACHE_ROOT:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_image_cache_root "$FLYWHEEL_IMAGE_CACHE_ROOT")
+[[ -n "${FLYWHEEL_GOLDEN_MISSING_PENALTY:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_golden_missing_penalty "$FLYWHEEL_GOLDEN_MISSING_PENALTY")
+[[ -n "${FLYWHEEL_COMMERCIAL_EXPORT_EVERY:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_commercial_export_every "$FLYWHEEL_COMMERCIAL_EXPORT_EVERY")
+[[ -n "${FLYWHEEL_ANNOTATION_REQUEST_SIZE:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_annotation_request_size "$FLYWHEEL_ANNOTATION_REQUEST_SIZE")
+[[ -n "${FLYWHEEL_GOLDEN_INJECTION_PER_REQUEST:-}" ]] && VALIDATOR_CMD+=(--neuron.flywheel_golden_injection_per_request "$FLYWHEEL_GOLDEN_INJECTION_PER_REQUEST")
+[[ -n "${NEURON_ANNOTATION_TIMEOUT:-}" ]] && VALIDATOR_CMD+=(--neuron.annotation_timeout "$NEURON_ANNOTATION_TIMEOUT")
+"${VALIDATOR_CMD[@]}" >"$vlog" 2>&1 &
 PIDS+=("$!")
 
 log "running ${RUN_SECONDS}s (set RUN_SECONDS to change)"

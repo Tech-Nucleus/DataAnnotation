@@ -17,11 +17,106 @@
 # DEALINGS IN THE SOFTWARE.
 
 import os
+import sys
 import subprocess
 import argparse
 from pathlib import Path
 import bittensor as bt
 from .logging import setup_events_logger
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover
+    load_dotenv = None
+
+
+_ENV_ARG_MAP = {
+    "NETUID": "--netuid",
+    "WALLET_NAME": "--wallet.name",
+    "WALLET_HOTKEY": "--wallet.hotkey",
+    "SUBTENSOR_NETWORK": "--subtensor.network",
+    "SUBTENSOR_CHAIN_ENDPOINT": "--subtensor.chain_endpoint",
+    "MINER_MODEL_BACKEND": "--miner.model_backend",
+    "MINER_ANNOTATION_WORKSPACE": "--miner.annotation_workspace",
+    "MINER_R2_PREFIX": "--miner.dual_flywheel_r2_prefix",
+    "SELF_HOSTED_TRAIN_URL": "--miner.self_hosted_train_url",
+    "SELF_HOSTED_INFER_URL": "--miner.self_hosted_infer_url",
+    "SELF_HOSTED_API_KEY": "--miner.self_hosted_api_key",
+    "SELF_HOSTED_POLL_INTERVAL_SECONDS": "--miner.self_hosted_poll_interval_seconds",
+    "YOLO_MODEL_PATH": "--miner.yolo_pretrained_weights",
+    "YOLO_EPOCHS": "--miner.yolo_epochs",
+    "YOLO_IMGSZ": "--miner.yolo_imgsz",
+    "YOLO_BATCH": "--miner.yolo_batch",
+    "OPENAI_API_KEY": "--miner.openai_api_key",
+    "OPENAI_BASE_URL": "--miner.openai_base_url",
+    "OPENAI_BASE_MODEL": "--miner.openai_base_model",
+    "OPENAI_N_EPOCHS": "--miner.openai_n_epochs",
+    "OPENAI_BATCH_SIZE": "--miner.openai_batch_size",
+    "OPENAI_LEARNING_RATE_MULTIPLIER": "--miner.openai_learning_rate_multiplier",
+    # Validator dataset configuration
+    "VALIDATOR_GOLDEN_DATASET": "--neuron.flywheel_golden_dataset_id",
+    "VALIDATOR_GOLDEN_SPLIT": "--neuron.flywheel_golden_split",
+    "VALIDATOR_GOLDEN_RATIO": "--neuron.flywheel_golden_ratio",
+    "VALIDATOR_GOLDEN_SPLIT_SEED": "--neuron.flywheel_golden_split_seed",
+    "VALIDATOR_ANNOTATION_DATASET": "--neuron.flywheel_annotation_dataset_ids",
+    "VALIDATOR_ANNOTATION_SPLIT": "--neuron.flywheel_annotation_split",
+    "VALIDATOR_ANNOTATION_MAX_PER_DATASET": "--neuron.flywheel_annotation_max_per_dataset",
+    "VALIDATOR_COCO_MANIFEST": "--neuron.flywheel_coco_manifest",
+    # Climate MRV dataset
+    "GEE_PROJECT": "--neuron.climate_mrv_gee_project",
+    "CLIMATE_MRV_N_RAW_CHIPS": "--neuron.climate_mrv_n_raw_chips",
+    "CLIMATE_MRV_N_GOLDEN_CHIPS": "--neuron.climate_mrv_n_golden_chips",
+    "CLIMATE_MRV_FALLBACK_DIR": "--neuron.climate_mrv_fallback_dir",
+    "CLIMATE_MRV_FALLBACK_GOLDEN_MANIFEST": "--neuron.climate_mrv_fallback_golden_manifest",
+    # Validator infra
+    "VALIDATOR_IMAGE_CACHE_ROOT": "--neuron.flywheel_image_cache_root",
+    "VALIDATOR_IMAGE_SERVING_BASE_URL": "--neuron.flywheel_image_serving_base_url",
+    "VALIDATOR_REQUEST_SIZE": "--neuron.flywheel_annotation_request_size",
+    "VALIDATOR_GOLDEN_INJECTION_PER_REQUEST": "--neuron.flywheel_golden_injection_per_request",
+    "VALIDATOR_COMMERCIAL_DATASET_PREFIX": "--neuron.flywheel_commercial_dataset_prefix",
+    "VALIDATOR_COMMERCIAL_EXPORT_EVERY": "--neuron.flywheel_commercial_export_every",
+    "VALIDATOR_FORWARD_STEP_SLEEP_SECONDS": "--neuron.forward_step_sleep_seconds",
+    "VALIDATOR_SAMPLE_SIZE": "--neuron.sample_size",
+    "VALIDATOR_TIMEOUT": "--neuron.timeout",
+    "VALIDATOR_ANNOTATION_TIMEOUT": "--neuron.annotation_timeout",
+    "VALIDATOR_NUM_CONCURRENT_FORWARDS": "--neuron.num_concurrent_forwards",
+    "COMMERCIAL_DRAW_BOXES": "--neuron.flywheel_commercial_draw_boxes",
+    "COMMERCIAL_ANNOTATED_IMAGE_PREFIX": "--neuron.flywheel_commercial_annotated_image_prefix",
+}
+
+_ENV_FLAG_MAP = {
+    "TEST_MODE": "--test-mode",
+    "MINER_SKIP_TRAINING": "--miner.skip_training",
+    "MINER_FORCE_RETRAIN": "--miner.force_retrain",
+    "VALIDATOR_DISABLE_SET_WEIGHTS": "--neuron.disable_set_weights",
+    "VALIDATOR_AXON_OFF": "--neuron.axon_off",
+}
+
+
+def _truthy_env(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _load_env_file() -> None:
+    if load_dotenv is not None:
+        load_dotenv()
+
+
+def _argv_has_option(argv: list[str], option: str) -> bool:
+    return any(arg == option or arg.startswith(f"{option}=") for arg in argv)
+
+
+def _argv_with_env_defaults(argv: list[str]) -> list[str]:
+    out = list(argv)
+    for env_name, option in _ENV_ARG_MAP.items():
+        value = os.getenv(env_name, "").strip()
+        if value and not _argv_has_option(out, option):
+            out.extend([option, value])
+    for env_name, option in _ENV_FLAG_MAP.items():
+        value = os.getenv(env_name, "").strip()
+        if value and _truthy_env(value) and not _argv_has_option(out, option):
+            out.append(option)
+    return out
 
 
 def is_cuda_available():
@@ -90,9 +185,9 @@ def add_args(cls, parser):
     )
 
     parser.add_argument(
-        "--mock",
+        "--test-mode",
         action="store_true",
-        help="Mock neuron and all network components.",
+        help="Use in-memory mock wallet/subtensor/metagraph/dendrite/axon for tests only.",
         default=False,
     )
 
@@ -157,94 +252,199 @@ def add_miner_args(cls, parser):
     )
 
     parser.add_argument(
-        "--miner.training_workspace",
+        "--miner.annotation_workspace",
         type=str,
-        help="Writable directory where miner training artifacts are produced.",
-        default=str(Path.cwd() / "artifacts" / "miner_training"),
+        help="Writable directory for miner annotation scratch files.",
+        default=str(Path.cwd() / "artifacts" / "miner_annotation"),
     )
 
-    parser.add_argument(
-        "--miner.private_dataset_root",
-        type=str,
-        help="Optional miner-owned private images directory to mix into training.",
-        default="",
-    )
-
-    parser.add_argument(
-        "--miner.enable_auto_hpo",
-        action="store_true",
-        help="Enable miner-side auto-HPO loop for training tasks.",
-        default=False,
-    )
-
-    parser.add_argument(
-        "--miner.autoresearch",
-        action="store_true",
-        help="Enable Karpathy-style autoresearch loop before YOLO training.",
-        default=False,
-    )
-
-    parser.add_argument(
-        "--miner.autoresearch_max_iters",
-        type=int,
-        help="Maximum iterations for autoresearch loop when enabled.",
-        default=4,
-    )
-
-    parser.add_argument(
-        "--miner.autoresearch_experiment_minutes",
-        type=int,
-        help="Per-iteration budget in minutes for autoresearch experiments.",
-        default=5,
-    )
-
-    parser.add_argument(
-        "--miner.autoresearch_log_level",
-        type=str,
-        help="Autoresearch log level.",
-        default="INFO",
-    )
-    parser.add_argument(
-        "--miner.response_mode",
-        type=str,
-        choices=["standard", "replay_nonce", "malformed_manifest", "wrong_model_hash"],
-        help="Stress-test mode for miner response shaping.",
-        default="standard",
-    )
-
+    # --- Legacy annotation backend (preserved for backward compatibility) ---
     parser.add_argument(
         "--miner.annotation_backend",
         type=str,
-        choices=["deterministic", "yolo"],
-        help="Annotation backend for dual-flywheel tasks (deterministic for CI; yolo uses fine-tuned weights).",
-        default="deterministic",
+        choices=["yolo"],
+        help=(
+            "Legacy annotation backend: yolo (YOLO-only detection). Synthetic backends were removed "
+            "from production paths."
+        ),
+        default="yolo",
+    )
+    parser.add_argument(
+        "--miner.detector_checkpoint",
+        type=str,
+        help="Local YOLO weights path used for Stage-1 detection in the annotation pipeline.",
+        default="yolov8s.pt",
     )
 
     parser.add_argument(
         "--miner.dual_flywheel_r2_prefix",
         type=str,
-        help="R2 key prefix for dual-flywheel artifacts (per-task subfolders are appended).",
-        default="miners/dual_flywheel",
+        help="R2 key prefix for annotation artifacts (per-task subfolders are appended).",
+        default="miners/annotations",
     )
 
+    # ===================================================================
+    # Multi-backend training & inference arguments
+    # ===================================================================
+
     parser.add_argument(
-        "--miner.random_hpo_draw",
-        action="store_true",
+        "--miner.model_backend",
+        type=str,
+        choices=["yolo_local", "self_hosted", "openai_vision"],
         help=(
-            "Dual-flywheel / training: pick one random hyperparameter bundle from the autoresearch "
-            "grid (use with --miner.hpo_seed so miners diverge). Mutually exclusive with autoresearch "
-            "when autoresearch is off."
+            "Model backend for training and inference: yolo_local (Ultralytics YOLO on GPU), "
+            "self_hosted (external REST API), openai_vision (OpenAI fine-tuning)."
         ),
+        default="",
+    )
+
+    # --- Dataset splitting ---
+    parser.add_argument(
+        "--miner.split_seed",
+        type=int,
+        help="Seed for deterministic hash-based dataset splitting.",
+        default=42,
+    )
+    parser.add_argument(
+        "--miner.train_split_pct",
+        type=int,
+        help="Percentage of images allocated to the training split (0-100).",
+        default=70,
+    )
+
+    # --- Class taxonomy ---
+    parser.add_argument(
+        "--miner.class_taxonomy_path",
+        type=str,
+        help="Path to JSON list of valid hazard class strings.",
+        default="",
+    )
+
+    # --- Training control ---
+    parser.add_argument(
+        "--miner.skip_training",
+        action="store_true",
+        help="Skip fine-tuning entirely; run inference with base/pretrained model.",
         default=False,
     )
-
     parser.add_argument(
-        "--miner.hpo_seed",
+        "--miner.force_retrain",
+        action="store_true",
+        help="Force retraining even if a cached model exists.",
+        default=False,
+    )
+    parser.add_argument(
+        "--miner.model_cache_dir",
+        type=str,
+        help="Directory for cached fine-tuned model checkpoints.",
+        default="",
+    )
+
+    # --- YOLO local backend ---
+    parser.add_argument(
+        "--miner.yolo_pretrained_weights",
+        type=str,
+        help="Path to pretrained YOLO weights for yolo_local backend.",
+        default="yolov8s.pt",
+    )
+    parser.add_argument("--miner.yolo_epochs", type=int, help="YOLO training epochs.", default=50)
+    parser.add_argument("--miner.yolo_imgsz", type=int, help="YOLO image size.", default=640)
+    parser.add_argument("--miner.yolo_batch", type=int, help="YOLO batch size.", default=16)
+    parser.add_argument("--miner.yolo_lr0", type=float, help="YOLO initial learning rate.", default=0.01)
+    parser.add_argument("--miner.yolo_lrf", type=float, help="YOLO final LR factor.", default=0.01)
+    parser.add_argument("--miner.yolo_momentum", type=float, help="YOLO SGD momentum.", default=0.937)
+    parser.add_argument("--miner.yolo_weight_decay", type=float, help="YOLO weight decay.", default=0.0005)
+    parser.add_argument("--miner.yolo_warmup_epochs", type=float, help="YOLO warmup epochs.", default=3.0)
+    parser.add_argument("--miner.yolo_optimizer", type=str, help="YOLO optimizer (auto, SGD, Adam, AdamW).", default="auto")
+    parser.add_argument("--miner.yolo_augment", action="store_true", help="Enable YOLO augmentation.", default=True)
+    parser.add_argument(
+        "--miner.yolo_pseudo_label_conf",
+        type=float,
+        help="Confidence threshold for YOLO pseudo-labeling on unlabeled images.",
+        default=0.5,
+    )
+    parser.add_argument(
+        "--miner.seed_labels_path",
+        type=str,
+        help="Path to a directory or JSON file with seed labels for YOLO training.",
+        default="",
+    )
+
+    # --- Self-hosted backend ---
+    parser.add_argument(
+        "--miner.self_hosted_train_url",
+        type=str,
+        help="URL for the self-hosted /train endpoint.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.self_hosted_infer_url",
+        type=str,
+        help="URL for the self-hosted /infer endpoint.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.self_hosted_api_key",
+        type=str,
+        help="Bearer token for self-hosted API authentication.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.self_hosted_poll_interval_seconds",
         type=int,
-        help="Seed for --miner.random_hpo_draw (different seeds => different hyperparameter draws).",
+        help="Seconds between polls when waiting for self-hosted training to complete.",
+        default=30,
+    )
+
+    # --- OpenAI Vision backend ---
+    parser.add_argument(
+        "--miner.openai_api_key",
+        type=str,
+        help="OpenAI API key for the openai_vision backend.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.openai_base_url",
+        type=str,
+        help="Optional OpenAI-compatible API base URL for integration tests or gateways.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.openai_base_model",
+        type=str,
+        help="OpenAI base model ID for fine-tuning.",
+        default="gpt-4o-2024-08-06",
+    )
+    parser.add_argument("--miner.openai_n_epochs", type=int, help="OpenAI fine-tuning epochs.", default=3)
+    parser.add_argument("--miner.openai_batch_size", type=int, help="OpenAI fine-tuning batch size.", default=1)
+    parser.add_argument(
+        "--miner.openai_learning_rate_multiplier",
+        type=float,
+        help="OpenAI fine-tuning learning rate multiplier.",
+        default=1.8,
+    )
+
+    # --- Auto-research ---
+    parser.add_argument(
+        "--miner.enable_autoresearch",
+        action="store_true",
+        help="Enable Karpathy-style auto-research hyperparameter search loop.",
+        default=False,
+    )
+    parser.add_argument(
+        "--miner.autoresearch_config_path",
+        type=str,
+        help="Path to YAML/JSON file defining the hyperparameter search space.",
+        default="",
+    )
+    parser.add_argument(
+        "--miner.autoresearch_max_trials",
+        type=int,
+        help="Max number of trial configurations (0 = full Cartesian product).",
         default=0,
     )
 
+    # --- W&B ---
     parser.add_argument(
         "--wandb.project_name",
         type=str,
@@ -288,9 +488,9 @@ def add_validator_args(cls, parser):
     )
 
     parser.add_argument(
-        "--neuron.training_timeout",
+        "--neuron.annotation_timeout",
         type=float,
-        help="Dendrite timeout for miner training tasks. Must cover the full train/upload response path.",
+        help="Dendrite timeout for miner annotation tasks (0 = use neuron.timeout).",
         default=0.0,
     )
 
@@ -340,59 +540,10 @@ def add_validator_args(cls, parser):
     )
 
     parser.add_argument(
-        "--neuron.dataset_root",
-        type=str,
-        help="Path to validator-owned hazard dataset partitions.",
-        default=str(
-            Path(__file__).resolve().parents[2] / "data" / "hazard"
-        ),
-    )
-
-    parser.add_argument(
         "--neuron.scheduler_seed",
         type=int,
-        help="Deterministic seed for cohort scheduler and dataset sampling.",
+        help="Deterministic seed for annotation request sampling.",
         default=13,
-    )
-
-    parser.add_argument(
-        "--neuron.promotion_threshold",
-        type=float,
-        help="Minimum final score required for model promotion.",
-        default=0.75,
-    )
-    parser.add_argument(
-        "--neuron.serving_recency_decay",
-        type=float,
-        help="Linear decay factor for promoted model serving priority by age-in-steps.",
-        default=0.003,
-    )
-    parser.add_argument(
-        "--neuron.serving_min_live_multiplier",
-        type=float,
-        help="Minimum recency multiplier retained for older promoted models.",
-        default=0.35,
-    )
-
-    parser.add_argument(
-        "--neuron.baseline_checkpoint_uri",
-        type=str,
-        help="URI to the current global baseline checkpoint miners fine-tune.",
-        default="yolov8s.pt",
-    )
-
-    parser.add_argument(
-        "--neuron.baseline_checkpoint_hash",
-        type=str,
-        help="Expected SHA256 hash of the current global baseline checkpoint.",
-        default="",
-    )
-
-    parser.add_argument(
-        "--neuron.max_training_seconds",
-        type=int,
-        help="Training budget for smoke or production TrainingTask synapses.",
-        default=60,
     )
 
     parser.add_argument(
@@ -416,19 +567,6 @@ def add_validator_args(cls, parser):
         default=0.05,
     )
 
-    # ---------- Dual-flywheel (annotation + training) configuration ----------
-    parser.add_argument(
-        "--neuron.task_mode",
-        type=str,
-        choices=["legacy_hazard_detection", "dual_flywheel"],
-        help=(
-            "Validator orchestration mode. 'dual_flywheel' dispatches "
-            "AnnotationAndTrainingTask synapses, scores annotations against the "
-            "Golden Set + consensus, evaluates miner checkpoints, and assembles "
-            "a per-image_id commercial dataset."
-        ),
-        default="dual_flywheel",
-    )
     parser.add_argument(
         "--neuron.flywheel_image_cache_root",
         type=str,
@@ -450,8 +588,12 @@ def add_validator_args(cls, parser):
     parser.add_argument(
         "--neuron.flywheel_golden_dataset_id",
         type=str,
-        help="Hugging Face dataset id for the golden labeled construction-safety dataset.",
-        default="keremberke/construction-safety-object-detection",
+        help=(
+            "Dataset source for the golden labeled set and annotation pool. "
+            "Use 'climate_mrv' (default) for the Climate MRV Sentinel-2 + Hansen satellite "
+            "imagery pipeline, or any HuggingFace dataset ID for the legacy path."
+        ),
+        default="climate_mrv",
     )
     parser.add_argument(
         "--neuron.flywheel_golden_split",
@@ -460,28 +602,59 @@ def add_validator_args(cls, parser):
         default="train",
     )
     parser.add_argument(
+        "--validator.golden_split_ratio",
         "--neuron.flywheel_golden_ratio",
         type=float,
-        help="Fraction of the labeled construction-safety dataset reserved as the validator-only Golden Set.",
-        default=0.3,
+        help="Fraction of the shared dataset reserved as the validator-only Golden Set.",
+        default=0.1,
     )
     parser.add_argument(
         "--neuron.flywheel_golden_split_seed",
         type=int,
-        help="Seed used to deterministically split the labeled dataset into Golden vs Training pools.",
-        default=20260509,
+        help="Seed used to deterministically split the shared dataset into Golden vs annotation pools.",
+        default=20260601,
+    )
+    parser.add_argument(
+        "--neuron.climate_mrv_gee_project",
+        type=str,
+        help="Google Earth Engine cloud project ID (optional; leave empty for personal auth).",
+        default="",
+    )
+    parser.add_argument(
+        "--neuron.climate_mrv_n_raw_chips",
+        type=int,
+        help="Number of Sentinel-2 annotation-pool chips to sample from GEE per run.",
+        default=200,
+    )
+    parser.add_argument(
+        "--neuron.climate_mrv_n_golden_chips",
+        type=int,
+        help="Number of Hansen/ESA golden chips to export per run (validator-only).",
+        default=60,
+    )
+    parser.add_argument(
+        "--neuron.climate_mrv_fallback_dir",
+        type=str,
+        help=(
+            "Directory containing pre-exported Climate MRV chip files for offline mode. "
+            "Defaults to data/climate_mrv/samples/ in the repo root when empty."
+        ),
+        default="",
+    )
+    parser.add_argument(
+        "--neuron.climate_mrv_fallback_golden_manifest",
+        type=str,
+        help="Path to golden_labels.json for fallback chips. Auto-detected when empty.",
+        default="",
     )
     parser.add_argument(
         "--neuron.flywheel_annotation_dataset_ids",
         type=str,
         help=(
-            "Comma-separated Hugging Face dataset ids for the unlabeled annotation pool. "
-            "Use hub_id@split per entry (e.g. org/ds@test); otherwise flywheel_annotation_split applies."
+            "Optional comma-separated extra Hugging Face dataset ids for the annotation pool. "
+            "By default the pool comes from the non-Golden portion of flywheel_golden_dataset_id."
         ),
-        default=(
-            "keremberke/construction-safety-object-detection@test,"
-            "keremberke/construction-safety-object-detection@validation"
-        ),
+        default="",
     )
     parser.add_argument(
         "--neuron.flywheel_annotation_split",
@@ -496,27 +669,6 @@ def add_validator_args(cls, parser):
         default=512,
     )
     parser.add_argument(
-        "--neuron.flywheel_benchmark_dataset_id",
-        type=str,
-        help=(
-            "Cross-domain Hugging Face dataset id used by the validator to detect "
-            "miner overfitting (never shown to miners)."
-        ),
-        default="rishitdagli/cppe-5",
-    )
-    parser.add_argument(
-        "--neuron.flywheel_benchmark_split",
-        type=str,
-        help="Split name to load from the cross-domain benchmark dataset.",
-        default="test",
-    )
-    parser.add_argument(
-        "--neuron.flywheel_benchmark_max_samples",
-        type=int,
-        help="Maximum benchmark samples loaded per round. Use 0 for no cap.",
-        default=64,
-    )
-    parser.add_argument(
         "--neuron.flywheel_hf_revision",
         type=str,
         help=(
@@ -526,55 +678,64 @@ def add_validator_args(cls, parser):
         default="refs/convert/parquet",
     )
     parser.add_argument(
-        "--neuron.flywheel_annotation_request_size",
-        type=int,
-        help="Total images per AnnotationAndTrainingTask request (golden + non-golden).",
-        default=10,
-    )
-    parser.add_argument(
-        "--neuron.flywheel_golden_injection_per_request",
-        type=int,
-        help="Number of Golden images injected (unlabeled to the miner) into each annotation request.",
-        default=2,
-    )
-    parser.add_argument(
         "--neuron.flywheel_annotation_image_jitter_ms",
         type=int,
         help=(
             "Upper bound (uniform 0..N ms) for async sleep between camouflaged annotation "
-            "images when building miner requests; homogenizes per-image latency."
+            "images when building full-dataset miner requests; homogenizes per-image latency."
         ),
         default=40,
     )
     parser.add_argument(
-        "--neuron.flywheel_training_images_per_request",
+        "--neuron.flywheel_annotation_request_size",
         type=int,
-        help="Number of labeled training images surfaced to miners for fine-tuning per round.",
-        default=16,
+        help=(
+            "Number of images to include in each miner annotation request. "
+            "Use 0 to send the full corpus for the round."
+        ),
+        default=0,
+    )
+    parser.add_argument(
+        "--neuron.flywheel_golden_injection_per_request",
+        type=int,
+        help=(
+            "How many of the request images come from the hidden Golden Set. "
+            "Ignored when flywheel_annotation_request_size is 0."
+        ),
+        default=0,
     )
     parser.add_argument(
         "--neuron.flywheel_alpha_annotation",
         type=float,
-        help="Annotation-fidelity weight in the final on-chain weight formula.",
-        default=0.4,
-    )
-    parser.add_argument(
-        "--neuron.flywheel_beta_model",
-        type=float,
-        help="Model-accuracy weight in the final on-chain weight formula.",
-        default=0.4,
-    )
-    parser.add_argument(
-        "--neuron.flywheel_gamma_adoption",
-        type=float,
-        help="Adoption-bonus weight in the final on-chain weight formula.",
-        default=0.2,
+        help=(
+            "Weight on annotation fidelity/consensus in the final on-chain score; "
+            "adoption bonus receives (1 - alpha)."
+        ),
+        default=0.7,
     )
     parser.add_argument(
         "--neuron.flywheel_hallucination_penalty",
         type=float,
         help="Multiplicative penalty applied per hallucinated annotation on a Golden image.",
         default=0.5,
+    )
+    parser.add_argument(
+        "--neuron.flywheel_golden_missing_penalty",
+        type=float,
+        help=(
+            "Multiplicative penalty per Golden image_id the miner failed to annotate "
+            "when that image was in the round task."
+        ),
+        default=0.5,
+    )
+    parser.add_argument(
+        "--neuron.flywheel_coco_manifest",
+        type=str,
+        help=(
+            "Path to COCO localnet manifest.json (from scripts/localnet/prepare_coco_val2017_subset.py). "
+            "When set, HuggingFace corpus loading is skipped."
+        ),
+        default="",
     )
     parser.add_argument(
         "--neuron.flywheel_commercial_dataset_prefix",
@@ -594,16 +755,19 @@ def add_validator_args(cls, parser):
         default=10,
     )
     parser.add_argument(
-        "--neuron.flywheel_model_eval_docker_image",
-        type=str,
-        help=(
-            "Docker image (built from Dockerfile.flywheel-yolo-eval) used to run YOLO inference "
-            "on miner checkpoints with ``docker run --network none``. When empty, the validator "
-            "loads weights in-process (convenient for CI; use a non-empty image for mainnet)."
-        ),
-        default="",
+        "--commercial-draw-boxes",
+        "--neuron.flywheel_commercial_draw_boxes",
+        type=lambda x: str(x).lower() in ("true", "1", "yes"),
+        help="Draw bounding boxes and class labels onto exported commercial images.",
+        default=True,
     )
-
+    parser.add_argument(
+        "--commercial-annotated-image-prefix",
+        "--neuron.flywheel_commercial_annotated_image_prefix",
+        type=str,
+        help="Prefix under which annotated images are uploaded in the commercial export.",
+        default="commercial/annotated-images/",
+    )
     parser.add_argument(
         "--wandb.project_name",
         type=str,
@@ -623,10 +787,18 @@ def config(cls):
     """
     Returns the configuration object specific to this miner or validator after adding relevant arguments.
     """
+    _load_env_file()
     parser = argparse.ArgumentParser()
     bt.wallet.add_args(parser)
     bt.subtensor.add_args(parser)
     bt.logging.add_args(parser)
     bt.axon.add_args(parser)
     cls.add_args(parser)
-    return bt.config(parser)
+    original_argv = sys.argv
+    sys.argv = _argv_with_env_defaults(sys.argv)
+    try:
+        cfg = bt.config(parser)
+    finally:
+        sys.argv = original_argv
+    cfg.mock = bool(getattr(cfg, "test_mode", False))
+    return cfg

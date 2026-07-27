@@ -121,6 +121,11 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
+!*.env.example
+.dependencies_installed
+staging.env
 .venv
 env/
 venv/
@@ -162,7 +167,11 @@ cython_debug/
 testing/
 
 # Editors
-.vscode/settings.json
+.vscode/
+.cursor/
+.claude/
+.codex/
+.agents/
 
 # Project-specific local artifacts
 .venv-btcli/

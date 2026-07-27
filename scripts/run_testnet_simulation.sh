@@ -22,7 +22,6 @@ VALIDATOR_PORT="${VALIDATOR_PORT:-8092}"
 VALIDATOR_AXON_OFF="${VALIDATOR_AXON_OFF:-1}"
 
 DATASET_ROOT="${DATASET_ROOT:-$ROOT_DIR/data/hazard}"
-BASELINE_URI="${BASELINE_URI:-$(realpath "$ROOT_DIR/data/hazard/baseline_checkpoint.json" | sed 's#^#file://#')}"
 MAX_TRAINING_SECONDS="${MAX_TRAINING_SECONDS:-120}"
 ENABLE_AUTORESEARCH="${ENABLE_AUTORESEARCH:-0}"
 MINER_RESPONSE_MODE="${MINER_RESPONSE_MODE:-standard}"
@@ -51,7 +50,6 @@ Common optional env vars:
   CHAIN_ENDPOINT (default: wss://test.finney.opentensor.ai:443)
   NETUID (default: 1)
   DATASET_ROOT (default: ./data/hazard)
-  BASELINE_URI (default: file://.../data/hazard/baseline_checkpoint.json)
   MAX_TRAINING_SECONDS (default: 120)
   DRY_RUN=1 (print commands only)
 EOF
@@ -86,13 +84,8 @@ MINER_CMD=(
   --wallet.hotkey "$MINER_WALLET_HOTKEY"
   --axon.port "$MINER_PORT"
   --blacklist.force_validator_permit
-  --miner.training_workspace "$ROOT_DIR/artifacts/miner_training/$MINER_WALLET_HOTKEY"
-  --miner.response_mode "$MINER_RESPONSE_MODE"
+  --miner.annotation_workspace "$ROOT_DIR/artifacts/miner_annotation/$MINER_WALLET_HOTKEY"
 )
-
-if [[ "$ENABLE_AUTORESEARCH" == "1" ]]; then
-  MINER_CMD+=(--miner.autoresearch)
-fi
 
 VALIDATOR_CMD=(
   "$PYTHON_BIN" neurons/validator.py
@@ -101,9 +94,6 @@ VALIDATOR_CMD=(
   --wallet.name "$VALIDATOR_WALLET_NAME"
   --wallet.hotkey "$VALIDATOR_WALLET_HOTKEY"
   --axon.port "$VALIDATOR_PORT"
-  --neuron.dataset_root "$DATASET_ROOT"
-  --neuron.baseline_checkpoint_uri "$BASELINE_URI"
-  --neuron.max_training_seconds "$MAX_TRAINING_SECONDS"
   --neuron.incentive_temperature "$INCENTIVE_TEMPERATURE"
   --neuron.incentive_floor "$INCENTIVE_FLOOR"
   --neuron.incentive_min_score "$INCENTIVE_MIN_SCORE"
