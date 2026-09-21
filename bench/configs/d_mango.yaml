@@ -1,0 +1,27 @@
+track: "D"
+name: "mango_mangrove"
+dataset:
+  id: "hjh1037/MANGO"
+  secondary_id: "lucasjvds/MangroveAI"
+  split: "country_disjoint_test"
+  gsd_m: 10.0
+  tile_size_px: 256
+  channels: 3 # RGB / 13-band Sentinel-2
+  classes:
+    0: "non_mangrove"
+    1: "mangrove"
+
+incumbent:
+  model_id: "UNet++"
+  secondary_model_id: "Swin-UMamba"
+  published_metrics:
+    mango_unetpp_iou: 0.9147
+    magset2_swin_umamba_iou: 0.7287
+    magset2_swin_umamba_acc: 0.8664
+    magset2_swin_umamba_f1: 0.8427
+
+evaluation:
+  metric: "iou"
+  task_type: "semantic_segmentation"
+  device: "cuda"
+  seed: 0

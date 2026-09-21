@@ -1,0 +1,33 @@
+track: "A"
+name: "oam_tcd"
+dataset:
+  id: "restor/tcd"
+  split: "test" # predefined holdout test split
+  cv_folds: 5
+  gsd_m: 0.10
+  tile_size_px: 2048
+  channels: 3 # RGB
+  bands: ["red", "green", "blue"]
+  classes:
+    0: "background"
+    1: "individual_tree"
+    2: "group_of_trees" # canopy
+
+incumbent:
+  model_id: "restor/tcd-segformer-mit-b5"
+  weights: "restor/tcd-segformer-mit-b5"
+  alternative_weights:
+    - "restor/tcd-segformer-mit-b2"
+    - "restor/tcd-segformer-mit-b0"
+  published_metrics:
+    iou: 0.887
+    accuracy: 0.905
+    f1: 0.914
+    map50: 42.1 # Mask R-CNN baseline
+
+evaluation:
+  metric: "iou"
+  task_type: "semantic_segmentation"
+  batch_size: 2
+  device: "cuda"
+  seed: 0

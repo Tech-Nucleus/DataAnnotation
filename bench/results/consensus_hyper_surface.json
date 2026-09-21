@@ -1,0 +1,323 @@
+{
+  "surface": [
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.5,
+      "rf1_75": 0.2225,
+      "precision_75": 0.2199,
+      "recall_75": 0.2252,
+      "rf1_50": 0.3576,
+      "precision_50": 0.3534,
+      "recall_50": 0.3619,
+      "total_detections": 382
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.6,
+      "rf1_75": 0.2033,
+      "precision_75": 0.2616,
+      "recall_75": 0.1662,
+      "rf1_50": 0.341,
+      "precision_50": 0.4388,
+      "recall_50": 0.2788,
+      "total_detections": 237
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.7,
+      "rf1_75": 0.1948,
+      "precision_75": 0.3769,
+      "recall_75": 0.1314,
+      "rf1_50": 0.2942,
+      "precision_50": 0.5692,
+      "recall_50": 0.1984,
+      "total_detections": 130
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.8,
+      "rf1_75": 0.0837,
+      "precision_75": 0.5152,
+      "recall_75": 0.0456,
+      "rf1_50": 0.1084,
+      "precision_50": 0.6667,
+      "recall_50": 0.059,
+      "total_detections": 33
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.85,
+      "rf1_75": 0.0264,
+      "precision_75": 0.8333,
+      "recall_75": 0.0134,
+      "rf1_50": 0.0264,
+      "precision_50": 0.8333,
+      "recall_50": 0.0134,
+      "total_detections": 6
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.9,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 1,
+      "confidence_threshold": 0.95,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.5,
+      "rf1_75": 0.2071,
+      "precision_75": 0.2445,
+      "recall_75": 0.1796,
+      "rf1_50": 0.306,
+      "precision_50": 0.3613,
+      "recall_50": 0.2654,
+      "total_detections": 274
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.6,
+      "rf1_75": 0.1815,
+      "precision_75": 0.2934,
+      "recall_75": 0.1314,
+      "rf1_50": 0.2667,
+      "precision_50": 0.4311,
+      "recall_50": 0.193,
+      "total_detections": 167
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.7,
+      "rf1_75": 0.1663,
+      "precision_75": 0.4524,
+      "recall_75": 0.1019,
+      "rf1_50": 0.2188,
+      "precision_50": 0.5952,
+      "recall_50": 0.134,
+      "total_detections": 84
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.8,
+      "rf1_75": 0.0312,
+      "precision_75": 0.5,
+      "recall_75": 0.0161,
+      "rf1_50": 0.0468,
+      "precision_50": 0.75,
+      "recall_50": 0.0241,
+      "total_detections": 12
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.85,
+      "rf1_75": 0.016,
+      "precision_75": 1.0,
+      "recall_75": 0.008,
+      "rf1_50": 0.016,
+      "precision_50": 1.0,
+      "recall_50": 0.008,
+      "total_detections": 3
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.9,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 2,
+      "confidence_threshold": 0.95,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.5,
+      "rf1_75": 0.2071,
+      "precision_75": 0.2445,
+      "recall_75": 0.1796,
+      "rf1_50": 0.306,
+      "precision_50": 0.3613,
+      "recall_50": 0.2654,
+      "total_detections": 274
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.6,
+      "rf1_75": 0.1815,
+      "precision_75": 0.2934,
+      "recall_75": 0.1314,
+      "rf1_50": 0.2667,
+      "precision_50": 0.4311,
+      "recall_50": 0.193,
+      "total_detections": 167
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.7,
+      "rf1_75": 0.1663,
+      "precision_75": 0.4524,
+      "recall_75": 0.1019,
+      "rf1_50": 0.2188,
+      "precision_50": 0.5952,
+      "recall_50": 0.134,
+      "total_detections": 84
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.8,
+      "rf1_75": 0.0312,
+      "precision_75": 0.5,
+      "recall_75": 0.0161,
+      "rf1_50": 0.0468,
+      "precision_50": 0.75,
+      "recall_50": 0.0241,
+      "total_detections": 12
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.85,
+      "rf1_75": 0.016,
+      "precision_75": 1.0,
+      "recall_75": 0.008,
+      "rf1_50": 0.016,
+      "precision_50": 1.0,
+      "recall_50": 0.008,
+      "total_detections": 3
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.9,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 3,
+      "confidence_threshold": 0.95,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.5,
+      "rf1_75": 0.2071,
+      "precision_75": 0.2445,
+      "recall_75": 0.1796,
+      "rf1_50": 0.306,
+      "precision_50": 0.3613,
+      "recall_50": 0.2654,
+      "total_detections": 274
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.6,
+      "rf1_75": 0.1815,
+      "precision_75": 0.2934,
+      "recall_75": 0.1314,
+      "rf1_50": 0.2667,
+      "precision_50": 0.4311,
+      "recall_50": 0.193,
+      "total_detections": 167
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.7,
+      "rf1_75": 0.1663,
+      "precision_75": 0.4524,
+      "recall_75": 0.1019,
+      "rf1_50": 0.2188,
+      "precision_50": 0.5952,
+      "recall_50": 0.134,
+      "total_detections": 84
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.8,
+      "rf1_75": 0.0312,
+      "precision_75": 0.5,
+      "recall_75": 0.0161,
+      "rf1_50": 0.0468,
+      "precision_50": 0.75,
+      "recall_50": 0.0241,
+      "total_detections": 12
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.85,
+      "rf1_75": 0.016,
+      "precision_75": 1.0,
+      "recall_75": 0.008,
+      "rf1_50": 0.016,
+      "precision_50": 1.0,
+      "recall_50": 0.008,
+      "total_detections": 3
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.9,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    },
+    {
+      "min_voters": 4,
+      "confidence_threshold": 0.95,
+      "rf1_75": 0.0,
+      "precision_75": 0.0,
+      "recall_75": 0.0,
+      "rf1_50": 0.0,
+      "precision_50": 0.0,
+      "recall_50": 0.0,
+      "total_detections": 0
+    }
+  ],
+  "best_params": {
+    "min_voters": 1,
+    "confidence_threshold": 0.5,
+    "rf1_75": 0.2225,
+    "precision_75": 0.2199,
+    "recall_75": 0.2252,
+    "rf1_50": 0.3576,
+    "precision_50": 0.3534,
+    "recall_50": 0.3619,
+    "total_detections": 382
+  }
+}

@@ -53,6 +53,9 @@ class EcologicalVisionEngine:
         qwen_path: str = "models/qwen2.5-vl-3b",
         device: Optional[str] = None,
         conf_threshold: float = 0.20,
+        load_yolo: bool = True,
+        load_segformer: bool = True,
+        load_qwen: bool = True,
     ) -> None:
         self.checkpoint_path = checkpoint_path
         self.segformer_path = segformer_path
@@ -73,9 +76,12 @@ class EcologicalVisionEngine:
         self._qwen_model = None
         self._qwen_processor = None
 
-        self._init_model()
-        self._init_segformer()
-        self._init_qwen()
+        if load_yolo:
+            self._init_model()
+        if load_segformer:
+            self._init_segformer()
+        if load_qwen:
+            self._init_qwen()
 
     def _init_model(self) -> None:
         """Initialize the underlying neural vision detector."""

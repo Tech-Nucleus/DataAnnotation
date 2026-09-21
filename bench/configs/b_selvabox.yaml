@@ -1,0 +1,29 @@
+track: "B"
+name: "selvabox_reforestree"
+dataset:
+  id: "CanopyRS/SelvaBox"
+  split: "test"
+  ood_datasets:
+    - "ReforesTree"
+    - "NeonTreeEvaluation"
+    - "BAMFORESTS"
+  gsd_m: 0.02 # 1.2 to 5.1 cm/px, normalized
+  channels: 3
+  bands: ["red", "green", "blue"]
+  classes:
+    1: "tree_crown"
+
+incumbent:
+  model_id: "DINO-5scale-Swin-L-384"
+  framework: "detrex"
+  published_metrics:
+    rf1_75: 0.76
+    map50: 69.05 # BAMFORESTS baseline
+
+evaluation:
+  metric: "rf1_75"
+  task_type: "crown_detection"
+  algorithm: "algorithm_1_val_tuned_thresholds"
+  iou_threshold: 0.75
+  device: "cuda"
+  seed: 0

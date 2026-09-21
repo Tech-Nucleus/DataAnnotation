@@ -221,3 +221,8 @@ logs/
 train/
 artifacts/
 
+# Benchmark datasets, weights, and external research repositories
+bench/data/
+bench/metrics/*_repo/
+paper.txt
+scripts/sync_metagraph_to_vps.sh

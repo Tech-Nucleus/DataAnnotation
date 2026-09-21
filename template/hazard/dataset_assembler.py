@@ -893,6 +893,8 @@ class DatasetAssembler:
         escalation_reason = None
         if conf < _DEFAULT_ACCEPT_CONFIDENCE:
             escalation_reason = "low_class_confidence"
+        elif _box_count < _DEFAULT_MIN_VOTERS:
+            escalation_reason = "insufficient_box_voters"
         elif len(all_miner_ids) < _DEFAULT_MIN_VOTERS:
             escalation_reason = "insufficient_miners_on_image"
         elif mean_iou_to_median < _DEFAULT_MIN_MEAN_IOU_TO_MEDIAN:

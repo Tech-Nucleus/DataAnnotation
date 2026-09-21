@@ -1,0 +1,30 @@
+track: "C"
+name: "fields_of_the_world"
+dataset:
+  id: "kerner-lab/fields-of-the-world"
+  mirror: "Voxel51/fields-of-the-world"
+  split: "test"
+  gsd_m: 10.0
+  channels: 4 # R, G, B, NIR
+  bands: ["B04", "B03", "B02", "B08"]
+  classes:
+    0: "background"
+    1: "field_interior"
+    2: "field_boundary"
+  scope_notes: "Excludes perennial/permanent crops (orchards, vineyards, forestry) and pasture/fallow land."
+
+incumbent:
+  model_id: "PTAViT3D"
+  baseline_model: "U-Net-EfficientNet-B3"
+  published_metrics:
+    fra_pixel_iou: 0.84
+    zaf_pixel_iou: 0.83
+    svn_pixel_iou: 0.67
+    ptavit3d_est_iou: 0.90
+    ptavit3d_fin_iou: 0.93
+
+evaluation:
+  metric: "pixel_iou_3class"
+  task_type: "parcel_delineation"
+  device: "cuda"
+  seed: 0
