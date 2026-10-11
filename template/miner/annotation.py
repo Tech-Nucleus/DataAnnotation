@@ -143,7 +143,7 @@ class AnnotationEngine:
                 round_num=int(getattr(synapse, "round_num", 0) or 0),
                 records=records,
             )
-            raw = json.dumps(payload.model_dump(), indent=2, sort_keys=True).encode("utf-8")
+            raw = json.dumps(payload.model_dump(), separators=(",", ":")).encode("utf-8")
             annotations_key = f"{remote_base}annotations.json"
             annotations_uri = upload_bytes_to_r2(
                 raw,

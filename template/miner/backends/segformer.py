@@ -144,6 +144,10 @@ class SegFormerBackend(BaseModelBackend):
                 coords = peak_local_max(
                     dist, min_distance=self.peak_min_dist, threshold_abs=5, labels=mask
                 )
+                if len(coords) == 0:
+                    results_map[img_item.image_id] = []
+                    continue
+
                 markers = np.zeros(dist.shape, dtype=np.int32)
                 for i, (r, c) in enumerate(coords):
                     markers[r, c] = i + 1
@@ -251,6 +255,11 @@ class SegFormerBackend(BaseModelBackend):
                 bt.logging.warning(
                     f"SegFormerBackend: inference failed on image {img_item.image_id}: {exc}"
                 )
+                if self.device == "cuda":
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
                 results_map[img_item.image_id] = []
 
         return results_map

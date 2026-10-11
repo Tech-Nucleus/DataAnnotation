@@ -540,8 +540,18 @@ class DatasetAssembler:
                 except Exception:
                     image_np = None
 
-            from template.hazard.geometry_quality import audit_annotation_geometry
+            from template.hazard.geometry_quality import (
+                audit_annotation_geometry,
+                compute_image_fidelity,
+            )
             audit = audit_annotation_geometry(selected.annotations, image_np)
+            miner_base_score = float(fidelity_by_uid[uid])
+            image_fidelity = compute_image_fidelity(
+                miner_fidelity=miner_base_score,
+                annotations=selected.annotations,
+                audit=audit,
+                image_np=image_np,
+            )
             if not audit.is_acceptable:
                 escalation_reasons.add(audit.rejection_reason or "geometric_quality_audit_failed")
             if len(selected.annotations) == 0:
@@ -681,7 +691,7 @@ class DatasetAssembler:
             winners.append(WinningAnnotation(
                 image_id=image_id,
                 image_name=image_name,
-                score=score,
+                score=image_fidelity,
                 chosen_uid=uid,
                 is_golden=False,
                 aggregation_method="vision_model_selection_v1",
@@ -1882,6 +1892,28 @@ class DatasetAssembler:
                             client.delete_objects(Bucket=bucket, Delete={"Objects": stale_keys})
                 except Exception as del_err:
                     bt.logging.debug(f"R2 stale keys cleanup note: {del_err}")
+
+            # Reiteration cleanup: if reiterating on the same dataset in replace mode, delete prior batches
+            replace_prior = os.getenv("COMMERCIAL_REITERATE_REPLACE_PREVIOUS", "0").lower() in ("1", "true", "yes")
+            if replace_prior and dataset_name:
+                try:
+                    prior_resp = client.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}{dataset_name}/")
+                    prior_stale = [
+                        {"Key": o["Key"]}
+                        for o in prior_resp.get("Contents", [])
+                        if not o["Key"].startswith(f"{prefix}{dataset_name}/{batch_id}/")
+                        and not o["Key"].endswith("current_round.json")
+                        and not o["Key"].endswith("batch_summary.json")
+                    ]
+                    if prior_stale:
+                        for chunk_idx in range(0, len(prior_stale), 1000):
+                            client.delete_objects(
+                                Bucket=bucket,
+                                Delete={"Objects": prior_stale[chunk_idx : chunk_idx + 1000], "Quiet": True},
+                            )
+                        bt.logging.info(f"Reiteration cleanup: purged {len(prior_stale)} objects from prior batches of {dataset_name}.")
+                except Exception as prior_del_err:
+                    bt.logging.debug(f"Prior batches cleanup note: {prior_del_err}")
 
         else:
             object_key = f"{prefix}commercial-dataset-{round_id}.jsonl"

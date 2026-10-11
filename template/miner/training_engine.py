@@ -306,7 +306,7 @@ class ModelTrainingAnnotationEngine:
             miner_sub = f"/{miner_hotkey}" if miner_hotkey else ""
             remote_base = f"{self.r2_prefix.rstrip('/')}/{synapse.task_id}{miner_sub}/"
             raw = json.dumps(
-                payload.model_dump(), indent=2, sort_keys=True
+                payload.model_dump(), separators=(",", ":")
             ).encode("utf-8")
             annotations_key = f"{remote_base}annotations.json"
             annotations_uri = upload_bytes_to_r2(

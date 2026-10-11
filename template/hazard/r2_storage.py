@@ -275,3 +275,37 @@ def delete_objects_from_r2(
         except Exception:
             pass
     return deleted_count
+
+
+def prune_stale_miner_annotations(
+    *,
+    creds: R2AccessCredentials,
+    retention_hours: float = 2.0,
+    prefix: str = "miners/annotations/",
+) -> Tuple[int, int]:
+    """Prune transient miner task submissions older than ``retention_hours``.
+
+    Returns ``(deleted_count, reclaimed_bytes)``.
+    """
+    import datetime
+
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        hours=retention_hours
+    )
+    client = _s3_client(creds)
+    paginator = client.get_paginator("list_objects_v2")
+    keys_to_delete: list[str] = []
+    bytes_to_delete = 0
+
+    for page in paginator.paginate(Bucket=creds.bucket_name, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            lm = obj.get("LastModified")
+            if lm and lm < cutoff:
+                keys_to_delete.append(obj["Key"])
+                bytes_to_delete += int(obj.get("Size", 0))
+
+    if not keys_to_delete:
+        return 0, 0
+
+    deleted_count = delete_objects_from_r2(keys_to_delete, creds=creds)
+    return deleted_count, bytes_to_delete

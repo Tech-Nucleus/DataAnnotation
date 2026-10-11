@@ -325,12 +325,12 @@ def audit_annotation_geometry(
 
     for item in annotations:
         if isinstance(item, dict):
-            poly = item.get("polygon")
-            bbox = item.get("bounding_box") or item.get("bbox")
+            poly = item.get("polygon") or item.get("fused_polygon")
+            bbox = item.get("bounding_box") or item.get("bbox") or item.get("fused_bounding_box")
             area = item.get("area")
         else:
-            poly = getattr(item, "polygon", None)
-            bbox = getattr(item, "bounding_box", None)
+            poly = getattr(item, "polygon", None) or getattr(item, "fused_polygon", None)
+            bbox = getattr(item, "bounding_box", None) or getattr(item, "fused_bounding_box", None)
             area = getattr(item, "area", None)
 
         if is_crude_box(poly, bbox):
@@ -471,3 +471,87 @@ def raster_polygon_iou(
         return float(inter / union if union > 0 else 0.0)
     except Exception:
         return 0.0
+
+
+def compute_image_fidelity(
+    miner_fidelity: float,
+    annotations: Sequence[Any],
+    audit: Optional[AnnotationQualityAudit] = None,
+    image_np: Optional[np.ndarray] = None,
+) -> float:
+    """Compute an authentic, mathematically grounded per-image fidelity score.
+
+    Combines:
+    1. Miner Base Empirical Fidelity (anchor on hidden golden ground-truth benchmark)
+    2. Area-weighted Detection & Classification Confidence on this specific image
+    3. Geometric Morphology Fidelity (organic crown compactness, convexity, contour smoothness)
+    4. Optical / Spectral Vegetative Concordance (Excess Green in polygon pixels)
+    5. Penalty multipliers (box gaming, spikiness, water hallucinations)
+    """
+    total = len(annotations)
+    if total == 0:
+        return 0.0
+
+    if audit is None:
+        audit = audit_annotation_geometry(annotations, image_np)
+
+    # 1. Detection Confidence
+    confs: list[float] = []
+    areas: list[float] = []
+    for item in annotations:
+        if isinstance(item, dict):
+            c = float(item.get("confidence", 0.95))
+            a = float(item.get("area", 100.0))
+        else:
+            c = float(getattr(item, "confidence", None) or 0.95)
+            a = float(getattr(item, "area", None) or 100.0)
+        confs.append(max(0.0, min(1.0, c)))
+        areas.append(max(1.0, a))
+
+    total_area = sum(areas)
+    if total_area > 0 and len(confs) == len(areas):
+        mean_conf = sum(c * a for c, a in zip(confs, areas)) / total_area
+    else:
+        mean_conf = sum(confs) / max(1, len(confs)) if confs else 0.5
+
+    # 2. Geometric Morphology
+    mean_q = audit.mean_compactness
+    mean_c = audit.mean_convexity
+    geom_q = 0.45 * mean_q + 0.55 * mean_c
+
+    # 3. Spectral Vegetative Concordance
+    spectral = 0.90
+    if image_np is not None and _CV2_AVAILABLE:
+        try:
+            mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
+            sampled = 0
+            for item in annotations[:30]:
+                if isinstance(item, dict):
+                    poly = item.get("polygon") or item.get("fused_polygon")
+                else:
+                    poly = getattr(item, "polygon", None) or getattr(item, "fused_polygon", None)
+                if poly and len(poly) >= 3:
+                    pts = np.array(poly, dtype=np.int32)
+                    cv2.fillPoly(mask, [pts], 1)
+                    sampled += 1
+            if np.sum(mask) > 100:
+                crop_pixels = image_np[mask == 1]
+                ch0 = crop_pixels[:, 0].astype(np.float32)
+                ch1 = crop_pixels[:, 1].astype(np.float32)
+                ch2 = crop_pixels[:, 2].astype(np.float32)
+                # Channel invariant check: green component must exceed min of others
+                exg = 2.0 * ch1 - ch0 - ch2
+                spectral = float(np.clip(0.5 + 0.5 * np.mean(exg > -5.0), 0.0, 1.0))
+        except Exception:
+            spectral = 0.90
+
+    base_miner = max(0.0, min(1.0, float(miner_fidelity)))
+    composite = (
+        0.35 * base_miner
+        + 0.25 * mean_conf
+        + 0.25 * geom_q
+        + 0.15 * spectral
+    )
+    final_score = composite * audit.quality_multiplier
+    return round(float(max(0.0, min(1.0, final_score))), 4)
+
