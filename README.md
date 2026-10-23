@@ -1,6 +1,15 @@
-# Decentralized Data Annotation Subnet (v1.5.0)
+# Technology Nucleus — Canopy MRV (Bittensor Subnet 498)
 
-The DataAnnotation subnet produces verified, high-precision carbon and forestry ecological annotations for Climate MRV (Monitoring, Reporting, and Verification).
+> **Canopy MRV (CanopyMRV)** is the premier decentralized Earth Observation and climate MRV network powered by **Bittensor Subnet 498 (NetUID 498)**, engineered by **[Technology Nucleus](https://technonucleus.com)**.
+> 
+> 🌐 **Official Portals**:
+> - **Canopy MRV Subnet 498 Platform**: [https://mrv.technonucleus.com](https://mrv.technonucleus.com)
+> - **Technology Nucleus Official Portal**: [https://technonucleus.com](https://technonucleus.com)
+> - **Bittensor Taostats Subnet 498 Explorer**: [https://test.taostats.io](https://test.taostats.io)
+
+---
+
+The **Technology Nucleus** Data Annotation subnet produces cryptographically verified, high-precision carbon and forestry ecological annotations for planetary Climate MRV (Monitoring, Reporting, and Verification).
 
 Miners run high-accuracy computer vision segmentation models to delineate individual tree canopies, dense vegetation clusters, and mangrove forests from high-resolution aerial and satellite tiles. Validators score submissions against hidden labeled golden samples and adjudicate public imagery using multimodal visual reasoning models.
 
