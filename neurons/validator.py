@@ -101,6 +101,95 @@ class Validator(BaseValidatorNeuron):
         self.selection_contribution_scores = np.zeros(self.metagraph.n, dtype=np.float32)
         self.last_commercial_dataset_uri: Optional[str] = None
 
+        # Agentic Multimodal Diagnostic Engine & Scoped Leaderboard Receipt Subsystem
+        val_cfg = getattr(self.config, "validator", object())
+        agentic_enabled = bool(getattr(val_cfg, "agentic_feedback", True))
+        agentic_api_key = getattr(val_cfg, "agentic_api_key", None) or os.getenv("GEMINI_API_KEY", "")
+        agentic_sleep = float(getattr(val_cfg, "agentic_sleep_seconds", 300))
+        agentic_max_calls = int(getattr(val_cfg, "agentic_max_daily_calls", 200))
+
+        from template.validator.agentic_feedback import ValidatorAgenticEngine
+        from template.utils.agentic_watchdog import AgenticWatchdog
+
+        watchdog = AgenticWatchdog(
+            role="validator",
+            sleep_seconds=agentic_sleep,
+            max_daily_calls=agentic_max_calls,
+            api_key=agentic_api_key,
+        )
+
+        r2_client = None
+        r2_bucket = os.getenv("R2_BUCKET_NAME", "annotation-subnet")
+        r2_prefix = os.getenv("R2_LOCALNET_TELEMETRY_PREFIX", "localnet_sim/telemetry/")
+        try:
+            creds = self._load_commercial_credentials()
+            if creds:
+                import boto3
+                r2_client = boto3.client(
+                    "s3",
+                    endpoint_url=creds.s3_endpoint,
+                    aws_access_key_id=creds.access_key_id,
+                    aws_secret_access_key=creds.secret_access_key,
+                    region_name="auto",
+                )
+                r2_bucket = creds.bucket_name
+        except Exception as r2_err:
+            bt.logging.warning(f"Could not initialize R2 client for validator agentic feedback: {r2_err}")
+
+        self.agentic_engine = ValidatorAgenticEngine(
+            watchdog=watchdog,
+            r2_client=r2_client,
+            r2_bucket=r2_bucket,
+            r2_telemetry_prefix=r2_prefix,
+            enabled=agentic_enabled,
+        )
+
+        # Hook dendrite for Secondary Transport (piggybacking last_round_feedback_json on AnnotationTask)
+        orig_dendrite_forward = getattr(self.dendrite, "forward", None)
+        if orig_dendrite_forward:
+            async def _agentic_dendrite_forward(axons, synapse=None, *args, **kwargs):
+                from template.protocol import AnnotationTask
+                if isinstance(synapse, AnnotationTask) and synapse.last_round_feedback_json is None:
+                    target_axons = axons if isinstance(axons, list) else [axons]
+                    for ax in target_axons:
+                        hk = getattr(ax, "hotkey", None)
+                        if hk:
+                            fb_json = self.agentic_engine.get_latest_feedback_json(hk)
+                            if fb_json:
+                                synapse.last_round_feedback_json = fb_json
+                                break
+                return await orig_dendrite_forward(axons, synapse=synapse, *args, **kwargs)
+            self.dendrite.forward = _agentic_dendrite_forward
+
+        # Hook dual_forward.evaluate_round_annotations so agentic diagnosis runs seamlessly right after scoring
+        import template.validator.dual_forward as df
+        if not getattr(df, "_agentic_wrapped", False):
+            _orig_eval = df.evaluate_round_annotations
+            def _agentic_eval_hook(*args, **kwargs):
+                results = _orig_eval(*args, **kwargs)
+                try:
+                    if hasattr(self, "agentic_engine") and self.agentic_engine.enabled:
+                        corpus = kwargs.get("corpus") or (args[0] if len(args) > 0 else self.image_corpus)
+                        ann_by_uid = kwargs.get("annotations_by_uid") or (args[1] if len(args) > 1 else {})
+                        uids = list(ann_by_uid.keys())
+                        hotkeys = list(self.metagraph.hotkeys)
+                        round_num = int(getattr(self, "step", 1))
+                        batch_id = f"batch_{round_num}"
+                        self.agentic_engine.process_round(
+                            round_num=round_num,
+                            batch_id=batch_id,
+                            uids=uids,
+                            hotkeys=hotkeys,
+                            per_miner_scores=results,
+                            corpus=corpus,
+                            annotations_by_uid=ann_by_uid,
+                        )
+                except Exception as e:
+                    bt.logging.warning(f"[AGENTIC VALIDATOR] Agentic feedback processing hook failed: {e}")
+                return results
+            df.evaluate_round_annotations = _agentic_eval_hook
+            df._agentic_wrapped = True
+
         bt.logging.info("event=validator_init mode=annotation_only")
         self.load_state()
 

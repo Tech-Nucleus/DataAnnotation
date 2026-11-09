@@ -284,6 +284,46 @@ def add_miner_args(cls, parser):
     )
 
     # ===================================================================
+    # Agentic Autopilot Arguments
+    # ===================================================================
+    parser.add_argument(
+        "--agentic",
+        action="store_true",
+        help="Enable autonomous miner autopilot agent mode.",
+        default=False,
+    )
+    parser.add_argument(
+        "--agentic.provider",
+        type=str,
+        default="gemini",
+        help="LLM provider for agentic autopilot (gemini, openai, anthropic).",
+    )
+    parser.add_argument(
+        "--agentic.api_key",
+        type=str,
+        default=os.getenv("GEMINI_API_KEY", ""),
+        help="API key for agentic autopilot LLM.",
+    )
+    parser.add_argument(
+        "--agentic.sleep_seconds",
+        type=float,
+        default=float(os.getenv("AGENTIC_SLEEP_SECONDS", "300")),
+        help="Watchdog sleep duration between post-round agent evaluations.",
+    )
+    parser.add_argument(
+        "--agentic.hf_token",
+        type=str,
+        default=os.getenv("HF_TOKEN", ""),
+        help="Hugging Face token for autonomous checkpoint discovery/downloading.",
+    )
+    parser.add_argument(
+        "--agentic.allow_code_edits",
+        action="store_true",
+        default=True,
+        help="Permit agent edits strictly within allowlisted miner pipeline files.",
+    )
+
+    # ===================================================================
     # Multi-backend training & inference arguments
     # ===================================================================
 
@@ -638,6 +678,33 @@ def add_validator_args(cls, parser):
         type=float,
         help="Fraction of the shared dataset reserved as the validator-only Golden Set.",
         default=0.1,
+    )
+    # ===================================================================
+    # Validator Agentic Diagnostic Engine Arguments
+    # ===================================================================
+    parser.add_argument(
+        "--validator.agentic_feedback",
+        action="store_true",
+        default=True,
+        help="Enable multimodal LLM diagnostic judge and scoped leaderboard receipt publishing.",
+    )
+    parser.add_argument(
+        "--validator.agentic_api_key",
+        type=str,
+        default=os.getenv("GEMINI_API_KEY", ""),
+        help="API key for validator diagnostic LLM judge.",
+    )
+    parser.add_argument(
+        "--validator.agentic_sleep_seconds",
+        type=float,
+        default=float(os.getenv("AGENTIC_SLEEP_SECONDS", "300")),
+        help="Validator agentic watchdog sleep seconds.",
+    )
+    parser.add_argument(
+        "--validator.agentic_max_daily_calls",
+        type=int,
+        default=int(os.getenv("AGENTIC_MAX_DAILY_CALLS", "200")),
+        help="Validator daily API call budget limit.",
     )
     parser.add_argument(
         "--neuron.flywheel_golden_split_seed",

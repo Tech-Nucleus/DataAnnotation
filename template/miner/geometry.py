@@ -116,6 +116,8 @@ def extract_canopy_geometry(
     confidence: float = 1.0,
     mask_xy: Optional[List[List[float]]] = None,
     canonicalize: bool = False,
+    epsilon_factor: Optional[float] = None,
+    force_coarse_box: bool = False,
 ) -> PerImageAnnotationItem:
     """Extract flexible polygon/OBB contour, pixel area, and ecological carbon weight."""
     x1, y1, x2, y2 = [float(c) for c in box_xyxy]
@@ -124,6 +126,20 @@ def extract_canopy_geometry(
 
     poly: Optional[List[List[float]]] = None
     poly_area: Optional[float] = None
+
+    if force_coarse_box:
+        # Deliberate sub-optimal 4-point bounding box fallback for baseline auditing
+        bx1, by1, bx2, by2 = round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)
+        poly = [[bx1, by1], [bx2, by1], [bx2, by2], [bx1, by2]]
+        poly_area = (bx2 - bx1) * (by2 - by1)
+        return PerImageAnnotationItem(
+            hazard_class=hazard_class,
+            bounding_box=[bx1, by1, bx2, by2],
+            polygon=poly,
+            area=round(poly_area, 2),
+            weight=round(poly_area / img_area, 6),
+            confidence=confidence,
+        )
 
     # 1. If explicit mask coordinates are provided
     if mask_xy is not None and len(mask_xy) >= 3:
@@ -162,10 +178,11 @@ def extract_canopy_geometry(
                     c_area = float(cv2.contourArea(cnt))
                     if c_area > 8:
                         peri = cv2.arcLength(cnt, True)
-                        epsilon = 0.010 * peri
+                        eff_eps = epsilon_factor if epsilon_factor is not None else 0.008
+                        epsilon = eff_eps * peri
                         approx = cv2.approxPolyDP(cnt, epsilon, True)
                         if len(approx) < 4:
-                            approx = cv2.approxPolyDP(cnt, 0.005 * peri, True)
+                            approx = cv2.approxPolyDP(cnt, 0.5 * eff_eps * peri, True)
                         if len(approx) >= 4:
                             poly = [[round(float(p[0][0] + ix1), 2), round(float(p[0][1] + iy1), 2)] for p in approx]
                             poly_area = c_area

@@ -70,6 +70,62 @@ class Miner(BaseMinerNeuron):
             priority_fn=self.priority_annotation,
         )
 
+        # Check if agentic autopilot mode is enabled
+        self.agentic_controller = None
+        is_agentic = getattr(self.config, "agentic", False)
+        if is_agentic:
+            from template.miner.agentic_controller import MinerAgenticController
+            from template.utils.agentic_watchdog import AgenticWatchdog
+            from template.hazard.r2_storage import load_r2_credentials_from_env
+
+            ag_cfg = getattr(self.config, "agentic", object())
+            api_key = getattr(ag_cfg, "api_key", None) or os.getenv("GEMINI_API_KEY", "")
+            sleep_sec = float(getattr(ag_cfg, "sleep_seconds", 300))
+            hf_token = getattr(ag_cfg, "hf_token", None) or os.getenv("HF_TOKEN")
+            allow_edits = bool(getattr(ag_cfg, "allow_code_edits", True))
+
+            watchdog = AgenticWatchdog(
+                role="miner",
+                sleep_seconds=sleep_sec,
+                api_key=api_key,
+            )
+
+            r2_client = None
+            r2_bucket = os.getenv("R2_BUCKET_NAME", "annotation-subnet")
+            r2_prefix = os.getenv("R2_LOCALNET_TELEMETRY_PREFIX", "localnet_sim/telemetry/")
+            try:
+                creds = load_r2_credentials_from_env()
+                if creds:
+                    import boto3
+                    r2_client = boto3.client(
+                        "s3",
+                        endpoint_url=creds.s3_endpoint,
+                        aws_access_key_id=creds.access_key_id,
+                        aws_secret_access_key=creds.secret_access_key,
+                        region_name="auto",
+                    )
+                    r2_bucket = creds.bucket_name
+            except Exception as r2_err:
+                bt.logging.warning(f"Could not initialize R2 client for miner agent: {r2_err}")
+
+            self.agentic_controller = MinerAgenticController(
+                wallet=self.wallet,
+                metagraph=self.metagraph,
+                watchdog=watchdog,
+                r2_client=r2_client,
+                r2_bucket=r2_bucket,
+                r2_telemetry_prefix=r2_prefix,
+                hf_token=hf_token,
+                allow_code_edits=allow_edits,
+                enabled=True,
+            )
+            self.agentic_controller.start_background()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if hasattr(self, "agentic_controller") and self.agentic_controller:
+            self.agentic_controller.stop()
+        super().__exit__(exc_type, exc_value, traceback)
+
     async def forward(self, synapse: bt.Synapse) -> bt.Synapse:
         """Stub: annotation-only miner handles tasks via forward_annotation."""
         bt.logging.warning("Generic forward called — annotation miner expects AnnotationTask.")
@@ -87,6 +143,19 @@ class Miner(BaseMinerNeuron):
         self, synapse: template.protocol.AnnotationTask
     ) -> template.protocol.AnnotationTask:
         """Annotate unlabeled images and upload annotations.json."""
+        # Ingest validator feedback if piggybacked on synapse
+        if hasattr(self, "agentic_controller") and self.agentic_controller is not None:
+            fb_json = getattr(synapse, "last_round_feedback_json", None)
+            if fb_json:
+                try:
+                    import json
+                    fb_data = json.loads(fb_json)
+                    self.agentic_controller.latest_received_feedback = fb_data
+                    self.agentic_controller.watchdog.wake()
+                    bt.logging.info("[AGENTIC MINER] Received piggybacked round feedback from validator!")
+                except Exception as fb_err:
+                    bt.logging.warning(f"[AGENTIC MINER] Failed to parse received feedback: {fb_err}")
+
         try:
             synapse = self.annotation_engine.run(
                 synapse, miner_hotkey=self.wallet.hotkey.ss58_address

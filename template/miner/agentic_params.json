@@ -1,0 +1,4 @@
+{
+  "conf_thres": 0.22,
+  "iou_thres": 0.44
+}

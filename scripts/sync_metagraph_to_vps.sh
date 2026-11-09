@@ -16,7 +16,7 @@ FINAL_FILE="/tmp/canopy_metagraph_cache.json"
 
 "$REPO_DIR/.venv-neurons/bin/python3" "$WEB_DIR/scripts/get_subnet_state.py" > "$TMP_FILE" 2>/dev/null || true
 
-if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE" && grep -q '"active_miners": [1-9]' "$TMP_FILE"; then
+if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
     mv "$TMP_FILE" "$FINAL_FILE"
     mkdir -p "$WEB_DIR/artifacts"
     cp "$FINAL_FILE" "$WEB_DIR/artifacts/metagraph_cache.json"
@@ -40,8 +40,8 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE" && grep -q '"acti
             "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/current_round.json" >/dev/null 2>&1 || true
     fi
 
-    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync complete: $(grep -o '"active_miners": [0-9]*' "$FINAL_FILE")"
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync complete: $(grep -o '"active_miners": [0-9]*' "$FINAL_FILE") | $(grep -o '"validator_online": [a-z]*' "$FINAL_FILE" || echo "")"
 else
-    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync skipped: output incomplete or 0 active miners"
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync skipped: output incomplete or invalid"
     rm -f "$TMP_FILE"
 fi

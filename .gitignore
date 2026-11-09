@@ -247,3 +247,8 @@ scripts/audit_diverse_5_biomes.py
 scripts/*hierarchical*
 scripts/setup_localnet_subnet2.py
 tests/test_audit_reproduction_and_penalization.py
+
+
+# Agentic Subnet State and Snapshots
+.agentic_state/
+.agentic_snapshots/
