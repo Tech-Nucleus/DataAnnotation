@@ -4,7 +4,7 @@
 Executes a complete 4-round audit adhering to the Master Specification & Phase 2 Hardening:
 - True Axon/Dendrite loopback communication over AnnotationTask synapses on port 8191.
 - strict_live_llm=True with zero heuristic/hardcoded fallbacks.
-- Live Gemini 2.5 Flash multimodal calls for Validator diagnostics and Miner intervention planning.
+- Live Gemini 3.5 Flash multimodal calls for Validator diagnostics and Miner intervention planning.
 - Autonomous Tier 2 Escalation (sliding-window tile inference / SAHI) when fidelity < 0.25.
 - Real autonomous git diff generation on allowlisted files.
 - Full Cloudflare R2 round-trip under isolated localnet_sim/ prefix.
@@ -96,7 +96,7 @@ async def run_4round_audit_async():
     api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is required for localnet agentic audit.")
-    model_name = os.getenv("AGENTIC_LLM_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("AGENTIC_LLM_MODEL", "gemini-3.5-flash")
 
     print(f"R2 Bucket:           {r2_bucket} (Prefix: {artifact_prefix}/)")
     print(f"Gemini API Model:    {model_name}")
@@ -333,7 +333,7 @@ async def run_4round_audit_async():
         r1_mean_iou = float(sum(c.iou for c in r1_components.values()) / len(r1_components))
         print(f"[Validator R1 Score] Avg Fidelity: {r1_avg_fid:.4f} | Mean IoU: {r1_mean_iou:.4f}")
 
-        # Validator builds composite & queries Gemini 2.5 Flash judge (strict_live_llm=True)
+        # Validator builds composite & queries Gemini 3.5 Flash judge (strict_live_llm=True)
         r1_pm_score = PerMinerAnnotationScore(
             uid=miner_uid,
             fidelity_scores_by_image_id=r1_scores_by_chip,

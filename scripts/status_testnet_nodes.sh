@@ -10,8 +10,8 @@ echo " Time: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 echo "=================================================================="
 
 echo ""
-echo "--- RUNNING PROCESSES ---"
-ps aux | grep -E "neurons/miner.py|neurons/validator.py|sync_daemon_15s.sh" | grep -v grep || echo "No nodes currently running."
+echo "--- RUNNING SUPERVISORS & PROCESSES ---"
+ps aux | grep -E "canopy_supervisor|neurons/miner.py|neurons/validator.py|sync_daemon_15s.sh" | grep -v grep || echo "No nodes currently running."
 
 echo ""
 echo "--- LISTENING PORTS ---"

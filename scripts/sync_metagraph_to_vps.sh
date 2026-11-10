@@ -29,7 +29,7 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
         -o ConnectTimeout=5 \
         "$FINAL_FILE" "$VPS_HOST:$VPS_DEST" >/dev/null 2>&1 || true
 
-    # Fast sync current_round.json if present
+    # Fast sync current_round.json both to root and climate_mrv
     if [ -f "$REPO_DIR/artifacts/commercial_dataset/current_round.json" ]; then
         scp -o StrictHostKeyChecking=no \
             -o ControlMaster=auto \
@@ -38,6 +38,35 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
             -o ConnectTimeout=5 \
             "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
             "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/current_round.json" >/dev/null 2>&1 || true
+        scp -o StrictHostKeyChecking=no \
+            -o ControlMaster=auto \
+            -o ControlPath="$SSH_SOCK" \
+            -o ControlPersist=10m \
+            -o ConnectTimeout=5 \
+            "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
+            "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/current_round.json" >/dev/null 2>&1 || true
+    fi
+
+    # Fast sync batch_summary.json if present
+    if [ -f "$REPO_DIR/artifacts/commercial_dataset/climate_mrv/batch_summary.json" ]; then
+        scp -o StrictHostKeyChecking=no \
+            -o ControlMaster=auto \
+            -o ControlPath="$SSH_SOCK" \
+            -o ControlPersist=10m \
+            -o ConnectTimeout=5 \
+            "$REPO_DIR/artifacts/commercial_dataset/climate_mrv/batch_summary.json" \
+            "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/batch_summary.json" >/dev/null 2>&1 || true
+    fi
+
+    # Fast sync get_commercial_dataset.py script to VPS
+    if [ -f "$WEB_DIR/scripts/get_commercial_dataset.py" ]; then
+        scp -o StrictHostKeyChecking=no \
+            -o ControlMaster=auto \
+            -o ControlPath="$SSH_SOCK" \
+            -o ControlPersist=10m \
+            -o ConnectTimeout=5 \
+            "$WEB_DIR/scripts/get_commercial_dataset.py" \
+            "$VPS_HOST:/var/www/canopymrv/scripts/get_commercial_dataset.py" >/dev/null 2>&1 || true
     fi
 
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync complete: $(grep -o '"active_miners": [0-9]*' "$FINAL_FILE") | $(grep -o '"validator_online": [a-z]*' "$FINAL_FILE" || echo "")"

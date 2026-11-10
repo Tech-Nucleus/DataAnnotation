@@ -116,9 +116,10 @@ class AnnotationEngine:
                 img_bytes = self._fetch_image(spec.image_url)
                 if self.annotation_backend == "yolo":
                     assert self.detector_checkpoint is not None
-                    from template.miner.detector_annotate import annotate_image_detector_only
+                    from template.miner.detector_loader import load_scoped_detector_annotate
 
-                    doc = annotate_image_detector_only(
+                    scoped_annotate_fn = load_scoped_detector_annotate(miner_uid=miner_hotkey)
+                    doc = scoped_annotate_fn(
                         checkpoint=self.detector_checkpoint,
                         image_bytes=img_bytes,
                         image_id=spec.image_id,

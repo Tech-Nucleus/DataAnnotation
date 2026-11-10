@@ -14,7 +14,7 @@ flowchart TD
     MinerResponse --> FidelityEval["AnnotationFidelityScorer<br/>(Evaluates golden set annotations)"]
     FidelityEval --> RepSelect["Representative Chip Selection<br/>(2 lowest + 1 median golden chips)"]
     RepSelect --> RAMGrid["RAM-Only Composite Grid<br/>(Part A: Miner vs. Part B: Ground Truth)<br/>STRICTLY RAM ONLY"]
-    RAMGrid --> GeminiJudge["Gemini 2.5 Flash Judge<br/>(Zero-Leakage Sanitized Diagnostic)"]
+    RAMGrid --> GeminiJudge["Gemini 3.5 Flash Judge<br/>(Zero-Leakage Sanitized Diagnostic)"]
     GeminiJudge --> ReceiptGen["Scoped Leaderboard Receipt<br/>(schema: agentic.feedback.v1)"]
     ReceiptGen --> PrimaryR2["Primary: Upload to Cloudflare R2<br/>telemetry/feedback/<hotkey_sha256>/"]
     ReceiptGen --> SecondarySynapse["Secondary: Piggyback on Synapse<br/>last_round_feedback_json"]
@@ -34,8 +34,8 @@ At the conclusion of each round, right after `AnnotationFidelityScorer` evaluate
   - **Left Panel (Part A):** Miner Prediction (satellite chip + miner predicted polygons in cyan/red + vertex dots + class/confidence text).
   - **Right Panel (Part B):** Golden Ground Truth (satellite chip + golden contours in green + missed in yellow `MISS` + false positives in red).
 
-### 2.2 Multimodal LLM Judge (Gemini 2.5 Flash)
-- Passes the single stitched composite JPEG together with quantitative polygon geometry statistics (`false_negative_rate`, `box_like_polygon_ratio`, `mean_vertices_per_polygon`, `mean_iou`) to **Gemini 2.5 Flash**.
+### 2.2 Multimodal LLM Judge (Gemini 3.5 Flash)
+- Passes the single stitched composite JPEG together with quantitative polygon geometry statistics (`false_negative_rate`, `box_like_polygon_ratio`, `mean_vertices_per_polygon`, `mean_iou`) to **Gemini 3.5 Flash**.
 - Uses `thinking_budget=0` and `max_output_tokens=120` to guarantee extreme cost efficiency and enforce 1–2 sentence engineering feedback.
 
 ### 2.3 Zero-Leakage Sanitization
@@ -111,7 +111,7 @@ python neurons/validator.py \
 ```ini
 # Gemini API Key (Required for Agentic Multimodal Diagnostics)
 GEMINI_API_KEY=your_gemini_api_key_here
-AGENTIC_LLM_MODEL=gemini-2.5-flash
+AGENTIC_LLM_MODEL=gemini-3.5-flash
 AGENTIC_SLEEP_SECONDS=300
 AGENTIC_MAX_DAILY_CALLS=200
 

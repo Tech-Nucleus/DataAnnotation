@@ -11,7 +11,7 @@ Miners in Subnet 498 detect, classify, and delineate ecological features (tree c
 ### 1.1 Dual Operational Modes
 
 1. **Standard Mode (Default):** Human-operated manual execution (`python neurons/miner.py ...`) behaves 100% identically to v1.5.0. Miners run inference using their chosen model checkpoint and fixed parameters.
-2. **Agentic Autopilot Mode (`--agentic`):** Miner operates as a self-improving autonomous AI agent. After each round, the agent reads its scoped leaderboard standing and validator diagnostic feedback, reasons hierarchically with **Gemini 2.5 Flash**, tunes inference parameters or applies scoped code patches, validates improvements on a local canary image, and sleeps via a cost-guard watchdog between rounds.
+2. **Agentic Autopilot Mode (`--agentic`):** Miner operates as a self-improving autonomous AI agent. After each round, the agent reads its scoped leaderboard standing and validator diagnostic feedback, reasons hierarchically with **Gemini 3.5 Flash**, tunes inference parameters or applies scoped code patches, validates improvements on a local canary image, and sleeps via a cost-guard watchdog between rounds.
 
 ---
 
@@ -22,7 +22,7 @@ When started with `--agentic`, the miner launches an autonomous background daemo
 ```mermaid
 flowchart TD
     RegGuard["Registration Guardrail<br/>(Verifies on-chain registration)"] --> Perceive["Perceive<br/>(Read scoped leaderboard & diagnostic feedback)"]
-    Perceive --> Reason["Reason (Gemini 2.5 Flash)<br/>(Hierarchical Intervention Planning)"]
+    Perceive --> Reason["Reason (Gemini 3.5 Flash)<br/>(Hierarchical Intervention Planning)"]
     Reason --> Snapshot["Create Snapshot<br/>(.agentic_snapshots/round_N/)"]
     Snapshot --> Apply["Apply Intervention<br/>(Tier 1 config tune or Tier 2 code patch)"]
     Apply --> Canary["Canary Verification Pass<br/>(test_clustered_trees.jpg)"]
@@ -68,7 +68,7 @@ The miner agent is strictly forbidden from executing wallet operations, coldkey 
 
 ### 2.6 Cost-Control Watchdog & Circuit Breaker
 - In audit and production modes, daily API token consumption is tracked in `.agentic_state/budget_ledger.json`.
-- Uses **Gemini 2.5 Flash** (`thinking_budget=0`) with max completion cap (1,024 tokens for miner).
+- Uses **Gemini 3.5 Flash** (`thinking_budget=0`) with max completion cap (1,024 tokens for miner).
 - Enforces daily budget limit (`--agentic.max_daily_calls 48`). If reached, the circuit breaker trips and gracefully degrades to heuristic mode.
 
 ---
@@ -151,7 +151,7 @@ python neurons/miner.py \
     --axon.port <PORT> \
     --agentic \
     --agentic.api_key <YOUR_GEMINI_API_KEY> \
-    --agentic.model gemini-2.5-flash \
+    --agentic.model gemini-3.5-flash \
     --agentic.sleep_seconds 300 \
     --agentic.max_daily_calls 48 \
     --agentic.allow_code_edits \
@@ -162,7 +162,7 @@ python neurons/miner.py \
 ```ini
 # Gemini API Key (Required for --agentic mode)
 GEMINI_API_KEY=your_gemini_api_key_here
-AGENTIC_LLM_MODEL=gemini-2.5-flash
+AGENTIC_LLM_MODEL=gemini-3.5-flash
 AGENTIC_SLEEP_SECONDS=300
 AGENTIC_MAX_DAILY_CALLS=48
 

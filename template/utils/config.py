@@ -287,7 +287,9 @@ def add_miner_args(cls, parser):
     # Agentic Autopilot Arguments
     # ===================================================================
     parser.add_argument(
+        "--agentic.enabled",
         "--agentic",
+        dest="agentic.enabled",
         action="store_true",
         help="Enable autonomous miner autopilot agent mode.",
         default=False,

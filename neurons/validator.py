@@ -194,7 +194,75 @@ class Validator(BaseValidatorNeuron):
         self.load_state()
 
     async def forward(self):
-        return await dual_flywheel_forward(self)
+        res = await dual_flywheel_forward(self)
+        try:
+            self._on_run_completion()
+        except Exception as exc:
+            bt.logging.warning(f"Failed to execute _on_run_completion: {exc}")
+        return res
+
+    def _on_run_completion(self):
+        """Executed upon each evaluation run completion before the 6-hour sleep.
+        Selects a fresh randomized 27-image batch from S3 and synchronizes to the dashboard.
+        """
+        try:
+            import random
+            from datetime import datetime, timezone
+            from pathlib import Path
+            import json
+
+            verified_27_batches = [
+                "batch_2", "batch_4", "batch_5", "batch_6",
+                "batch_7", "batch_9", "batch_10", "batch_14", "batch_16"
+            ]
+            selected_batch = random.choice(verified_27_batches)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            step_num = int(getattr(self, "step", 1))
+            round_id = f"step-{step_num}"
+
+            round_info = {
+                "dataset_id": "climate_mrv",
+                "dataset_name": "climate_mrv",
+                "batch_id": selected_batch,
+                "round_id": round_id,
+                "timestamp": now_iso,
+                "public_images": 27,
+                "labeled_images": 27,
+                "randomized": True,
+            }
+
+            # 1. Update local files
+            prefix_path = getattr(self.config.neuron, "flywheel_commercial_dataset_prefix", "")
+            base_dir_str = str(prefix_path).replace("file://", "")
+            if base_dir_str:
+                base_dir = Path(base_dir_str)
+                base_dir.mkdir(parents=True, exist_ok=True)
+                (base_dir / "current_round.json").write_text(json.dumps(round_info, indent=2), encoding="utf-8")
+                (base_dir / "climate_mrv").mkdir(parents=True, exist_ok=True)
+                (base_dir / "climate_mrv" / "current_round.json").write_text(json.dumps(round_info, indent=2), encoding="utf-8")
+
+            # 2. Upload to S3 / Cloudflare R2
+            creds = self._load_commercial_credentials()
+            if creds:
+                import boto3
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=creds.s3_endpoint,
+                    aws_access_key_id=creds.access_key_id,
+                    aws_secret_access_key=creds.secret_access_key,
+                    region_name="auto",
+                )
+                r_bytes = json.dumps(round_info, indent=2).encode("utf-8")
+                s3.put_object(Bucket=creds.bucket_name, Key="climate_mrv/current_round.json", Body=r_bytes, ContentType="application/json")
+                s3.put_object(Bucket=creds.bucket_name, Key="current_round.json", Body=r_bytes, ContentType="application/json")
+
+            bt.logging.info(f"[RUN COMPLETION] Synchronized commercial dataset for dashboard: batch={selected_batch} (27 images) on S3 and local.")
+
+            # 3. Trigger immediate metagraph and commercial dataset sync to VPS
+            import subprocess
+            subprocess.Popen(["bash", "scripts/sync_metagraph_to_vps.sh"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            bt.logging.warning(f"[RUN COMPLETION] Failed to rotate commercial batch: {e}")
 
     def update_score_ledgers(self, breakdowns: List[DualFlywheelBreakdown], uids: List[int]) -> None:
         alpha = float(self.config.neuron.moving_average_alpha)

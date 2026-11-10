@@ -36,7 +36,12 @@ class AgenticWatchdog:
         strict_live_llm: bool = False,
     ):
         self.role = role.lower()
-        self.state_dir = Path(state_dir or "./.agentic_state").resolve()
+        if state_dir is not None:
+            self.state_dir = Path(state_dir).resolve()
+        elif self.role == "validator":
+            self.state_dir = Path("./.agentic_state/validator").resolve()
+        else:
+            self.state_dir = Path("./.agentic_state/miners/default").resolve()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.ledger_path = self.state_dir / "budget_ledger.json"
         self.override_path = self.state_dir / "sleep_override.json"
@@ -50,7 +55,7 @@ class AgenticWatchdog:
         self.max_daily_calls = int(max_daily_calls if max_daily_calls is not None else env_daily)
 
         self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
-        self.model = model or os.getenv("AGENTIC_LLM_MODEL", "gemini-2.5-flash")
+        self.model = model or os.getenv("AGENTIC_LLM_MODEL", "gemini-3.5-flash")
 
         self._lock = threading.Lock()
         self._wake_event = threading.Event()
@@ -196,8 +201,9 @@ class AgenticWatchdog:
         temperature: float = 0.2,
         strict_live_llm: Optional[bool] = None,
         round_num: Optional[int] = None,
+        response_mime_type: Optional[str] = None,
     ) -> Optional[str]:
-        """Invoke Gemini 2.5 Flash within token budget and return raw text."""
+        """Invoke Gemini 3.5 Flash within token budget and return raw text."""
         strict = self.strict_live_llm if strict_live_llm is None else strict_live_llm
 
         if not self.check_budget():
@@ -230,12 +236,16 @@ class AgenticWatchdog:
                 contents.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
             contents.append(user_content)
 
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=max_tokens,
-                temperature=temperature,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            )
+            cfg_kwargs = {
+                "system_instruction": system_prompt,
+                "max_output_tokens": max_tokens,
+                "temperature": temperature,
+                "thinking_config": types.ThinkingConfig(thinking_budget=0),
+            }
+            if response_mime_type:
+                cfg_kwargs["response_mime_type"] = response_mime_type
+
+            config = types.GenerateContentConfig(**cfg_kwargs)
 
             resp = client.models.generate_content(
                 model=self.model,

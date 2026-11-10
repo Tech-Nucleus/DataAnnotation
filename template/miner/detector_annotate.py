@@ -32,8 +32,35 @@ def annotate_image_detector_only(
             "pillow and ultralytics are required to run YOLO annotations."
         ) from exc
 
+    # If this is root detector_annotate and a scoped version exists, dispatch to hot-reloaded scoped module
+    if not getattr(annotate_image_detector_only, "_is_scoped_executing", False):
+        try:
+            from template.miner.detector_loader import load_scoped_detector_annotate
+            scoped_fn = load_scoped_detector_annotate(miner_uid=miner_uid)
+            if scoped_fn != annotate_image_detector_only:
+                setattr(annotate_image_detector_only, "_is_scoped_executing", True)
+                try:
+                    return scoped_fn(
+                        checkpoint=checkpoint,
+                        image_bytes=image_bytes,
+                        image_id=image_id,
+                        image_url=image_url,
+                        model_version=model_version,
+                        miner_uid=miner_uid,
+                        conf_thres=conf_thres,
+                        iou_thres=iou_thres,
+                        imgsz=imgsz,
+                        epsilon_factor=epsilon_factor,
+                        max_area_ratio=max_area_ratio,
+                        force_coarse_box=force_coarse_box,
+                    )
+                finally:
+                    setattr(annotate_image_detector_only, "_is_scoped_executing", False)
+        except Exception:
+            pass
+
     from template.miner.agentic_controller import load_miner_params
-    params = load_miner_params()
+    params = load_miner_params(miner_uid=miner_uid)
 
     eff_conf = conf_thres if conf_thres is not None else float(params.get("conf_thres", 0.25))
     eff_iou = iou_thres if iou_thres is not None else float(params.get("iou_thres", 0.45))
@@ -68,7 +95,8 @@ def annotate_image_detector_only(
         ]
         for tx0, ty0, tx1, ty1 in tiles:
             tile_crop = img.crop((tx0, ty0, tx1, ty1))
-            t_res = model(tile_crop, conf=eff_conf, iou=eff_iou, imgsz=eff_imgsz, verbose=False)
+            tile_conf = max(eff_conf, 0.25)
+            t_res = model(tile_crop, conf=tile_conf, iou=eff_iou, imgsz=eff_imgsz, verbose=False)
             if t_res and len(t_res) > 0 and t_res[0].boxes is not None:
                 for b_idx, box in enumerate(t_res[0].boxes):
                     c_xyxy = box.xyxy[0].tolist()
@@ -76,11 +104,16 @@ def annotate_image_detector_only(
                     cls_idx = int(box.cls[0].item())
                     cls_name = model.names[cls_idx]
                     conf = float(box.conf[0].item()) if hasattr(box, "conf") and box.conf is not None else 1.0
+                    t_mask_xy = None
+                    if hasattr(t_res[0], "masks") and t_res[0].masks is not None and len(t_res[0].masks) > b_idx:
+                        raw_pts = t_res[0].masks.xy[b_idx].tolist()
+                        t_mask_xy = [[pt[0] + tx0, pt[1] + ty0] for pt in raw_pts]
                     ann_item = extract_canopy_geometry(
                         pil_img=img,
                         box_xyxy=g_xyxy,
                         hazard_class=cls_name,
                         confidence=conf,
+                        mask_xy=t_mask_xy,
                         epsilon_factor=eff_eps,
                         force_coarse_box=eff_coarse,
                     )

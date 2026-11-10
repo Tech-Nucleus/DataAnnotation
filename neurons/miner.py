@@ -72,7 +72,8 @@ class Miner(BaseMinerNeuron):
 
         # Check if agentic autopilot mode is enabled
         self.agentic_controller = None
-        is_agentic = getattr(self.config, "agentic", False)
+        ag_cfg = getattr(self.config, "agentic", None)
+        is_agentic = bool(getattr(ag_cfg, "enabled", False)) if ag_cfg is not None else False
         if is_agentic:
             from template.miner.agentic_controller import MinerAgenticController
             from template.utils.agentic_watchdog import AgenticWatchdog

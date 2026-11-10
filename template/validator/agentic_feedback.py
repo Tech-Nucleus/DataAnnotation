@@ -4,7 +4,7 @@ Implements:
 1. Representative golden chip selection (2 lowest-scoring + 1 median-scoring chips).
 2. RAM-only side-by-side composite comparison grid (zero disk/R2 leakage of golden chips).
 3. Quantitative geometry error metric extraction.
-4. Multimodal diagnostic querying via Gemini 2.5 Flash with strict zero-leakage sanitization.
+4. Multimodal diagnostic querying via Gemini 3.5 Flash with strict zero-leakage sanitization.
 5. Scoped per-miner leaderboard receipt publishing via Cloudflare R2 and Synapse piggybacking.
 """
 
@@ -314,7 +314,7 @@ def generate_validator_feedback(
     strict_live_llm: bool = False,
     round_num: int = 1,
 ) -> str:
-    """Pass single stitched composite JPEG + metrics block to Gemini 2.5 Flash."""
+    """Pass single stitched composite JPEG + metrics block to Gemini 3.5 Flash."""
     system_instruction = (
         "You are the Subnet 498 CanopyMRV Validator Diagnostic Judge. Compare Left (Miner Prediction) "
         "vs. Right (Golden Ground Truth) across these satellite canopy samples and accompanying polygon geometry statistics. "
