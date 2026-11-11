@@ -121,11 +121,18 @@ done
 VAL_PID=$!
 echo "   -> Validator supervisor started with PID: $VAL_PID"
 
-echo "[5/5] Launching 15s Metagraph & R2 Sync Daemon..."
-pkill -f "sync_daemon_15s.sh" || true
-setsid bash scripts/sync_daemon_15s.sh </dev/null >> /tmp/canopy_sync_daemon.log 2>&1 &
+echo "[5/5] Launching 15s Metagraph & R2 Sync Daemon Supervisor..."
+pkill -f "canopy_supervisor_sync|sync_daemon_15s.sh" || true
+setsid bash -c 'exec -a canopy_supervisor_sync bash -c "
+while true; do
+  echo \"[\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")] Starting sync_daemon_15s.sh...\" >> logs/sync_daemon.log
+  bash scripts/sync_daemon_15s.sh >> logs/sync_daemon.log 2>&1 || true
+  echo \"[\$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")] sync_daemon exited. Restarting in 5s...\" >> logs/sync_daemon.log
+  sleep 5
+done
+"' </dev/null >> logs/sync_daemon.log 2>&1 &
 SYNC_PID=$!
-echo "   -> Sync Daemon started with PID: $SYNC_PID"
+echo "   -> Sync Daemon supervisor started with PID: $SYNC_PID"
 
 disown -a 2>/dev/null || true
 

@@ -21,12 +21,21 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
     mkdir -p "$WEB_DIR/artifacts"
     cp "$FINAL_FILE" "$WEB_DIR/artifacts/metagraph_cache.json"
 
-    # Fast SSH sync using multiplexed socket
+    # Ensure SSH socket is clean if stale
+    if [ -e "$SSH_SOCK" ] && ! ssh -O check -o ControlPath="$SSH_SOCK" "$VPS_HOST" >/dev/null 2>&1; then
+        rm -f "$SSH_SOCK"
+    fi
+
+    # Fast SSH sync using multiplexed socket with fallback to direct connection
     scp -o StrictHostKeyChecking=no \
         -o ControlMaster=auto \
         -o ControlPath="$SSH_SOCK" \
         -o ControlPersist=10m \
         -o ConnectTimeout=5 \
+        "$FINAL_FILE" "$VPS_HOST:$VPS_DEST" >/dev/null 2>&1 || \
+    scp -o StrictHostKeyChecking=no \
+        -o ControlPath=none \
+        -o ConnectTimeout=8 \
         "$FINAL_FILE" "$VPS_HOST:$VPS_DEST" >/dev/null 2>&1 || true
 
     # Fast sync current_round.json both to root and climate_mrv
@@ -37,12 +46,23 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
             -o ControlPersist=10m \
             -o ConnectTimeout=5 \
             "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
+            "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/current_round.json" >/dev/null 2>&1 || \
+        scp -o StrictHostKeyChecking=no \
+            -o ControlPath=none \
+            -o ConnectTimeout=8 \
+            "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
             "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/current_round.json" >/dev/null 2>&1 || true
+
         scp -o StrictHostKeyChecking=no \
             -o ControlMaster=auto \
             -o ControlPath="$SSH_SOCK" \
             -o ControlPersist=10m \
             -o ConnectTimeout=5 \
+            "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
+            "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/current_round.json" >/dev/null 2>&1 || \
+        scp -o StrictHostKeyChecking=no \
+            -o ControlPath=none \
+            -o ConnectTimeout=8 \
             "$REPO_DIR/artifacts/commercial_dataset/current_round.json" \
             "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/current_round.json" >/dev/null 2>&1 || true
     fi
@@ -55,6 +75,11 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
             -o ControlPersist=10m \
             -o ConnectTimeout=5 \
             "$REPO_DIR/artifacts/commercial_dataset/climate_mrv/batch_summary.json" \
+            "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/batch_summary.json" >/dev/null 2>&1 || \
+        scp -o StrictHostKeyChecking=no \
+            -o ControlPath=none \
+            -o ConnectTimeout=8 \
+            "$REPO_DIR/artifacts/commercial_dataset/climate_mrv/batch_summary.json" \
             "$VPS_HOST:/var/www/canopymrv/artifacts/commercial_dataset/climate_mrv/batch_summary.json" >/dev/null 2>&1 || true
     fi
 
@@ -66,10 +91,15 @@ if [ -s "$TMP_FILE" ] && grep -q '"success": true' "$TMP_FILE"; then
             -o ControlPersist=10m \
             -o ConnectTimeout=5 \
             "$WEB_DIR/scripts/get_commercial_dataset.py" \
+            "$VPS_HOST:/var/www/canopymrv/scripts/get_commercial_dataset.py" >/dev/null 2>&1 || \
+        scp -o StrictHostKeyChecking=no \
+            -o ControlPath=none \
+            -o ConnectTimeout=8 \
+            "$WEB_DIR/scripts/get_commercial_dataset.py" \
             "$VPS_HOST:/var/www/canopymrv/scripts/get_commercial_dataset.py" >/dev/null 2>&1 || true
     fi
 
-    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync complete: $(grep -o '"active_miners": [0-9]*' "$FINAL_FILE") | $(grep -o '"validator_online": [a-z]*' "$FINAL_FILE" || echo "")"
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync complete: $(grep -o '"active_miners": [0-9]*' "$FINAL_FILE" || echo "") | $(grep -o '"validator_online": [a-z]*' "$FINAL_FILE" || echo "")"
 else
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Metagraph sync skipped: output incomplete or invalid"
     rm -f "$TMP_FILE"
